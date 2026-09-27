@@ -1,0 +1,38 @@
+name: cleaner-crew-watchdog
+
+# Fails loudly if a crew commit (Cleaner-Crew-* trailers) lands on the default branch
+# without going through a pull request. Detection, not prevention: use it where branch
+# protection isn't available, e.g. private repos on GitHub Free.
+on:
+  push:
+    branches: [__DEFAULT_BRANCH__]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  watchdog:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Crew commits must arrive through a pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.event.after }}
+        run: |
+          range="$BEFORE..$AFTER"
+          [ "$BEFORE" = "0000000000000000000000000000000000000000" ] && range="$AFTER"
+          bad=0
+          for sha in $(git rev-list $range); do
+            git log -1 --format=%B "$sha" | grep -q '^Cleaner-Crew-Task: ' || continue
+            prs=$(gh api "repos/${{ github.repository }}/commits/$sha/pulls" --jq 'length')
+            if [ "$prs" = "0" ]; then
+              echo "::error::crew commit $sha reached ${{ github.ref_name }} without a pull request"
+              bad=1
+            fi
+          done
+          exit $bad

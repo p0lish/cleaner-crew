@@ -3,7 +3,7 @@
 # CI verify job reads it from the base branch, never from a crew MR.
 
 limits:
-  max_files_changed: 8
+  max_files_changed: 8       # lockfiles don't count towards these two
   max_diff_lines: 300
   max_open_mrs: 3            # stop opening MRs until humans review the existing ones
   max_open_proposals: 10     # stop scouting until humans triage the proposals
@@ -47,6 +47,7 @@ trust:
   min_samples: 5
   promote_at: 0.8
   demote_below: 0.5
+  require_protection_for_ready: true   # unprotected default branch -> everything stays draft
 
 # Extra test globs can be listed under `test_globs:`; the defaults cover common layouts.
 
@@ -64,8 +65,12 @@ categories:
     enabled: false           # enable once you trust the crew with benchmarks
     require_benchmark: true
     max_level: shadow
+  # The scout proposes upgrades from `commands.outdated`; the orchestrator installs the new
+  # version (network on, install scripts off, no AI), the quartermaster adapts the code (no
+  # network), the inspector adapts tests if needed, and the hooded agent reviews the
+  # lockfile diff. Majors and anything not in `allowed` go to a human.
   dependency-upgrade:
-    enabled: false           # Renovate/Dependabot usually do this better
+    enabled: false
     allowed: [patch, minor]
     allow_paths: ["**/*.lock", "**/package-lock.json", "**/pnpm-lock.yaml", "**/uv.lock", "**/go.sum"]
     max_level: draft

@@ -30,7 +30,7 @@ import yaml
 
 from .config import Config
 
-ROLES = ("scout", "manager", "janitor", "inspector", "hooded")
+ROLES = ("scout", "manager", "janitor", "quartermaster", "inspector", "hooded")
 READ_ONLY = ["Read", "Grep", "Glob"]
 ALWAYS_DENIED = ["WebFetch", "WebSearch", "Task", "Agent"]
 
@@ -45,6 +45,7 @@ def role_tools(role: str, cfg: Config) -> list[str]:
         "scout": READ_ONLY + ["Bash(git log *)", "Bash(git ls-files *)"],
         "manager": READ_ONLY,
         "janitor": READ_ONLY + ["Edit", "Write"] + run_checks,
+        "quartermaster": READ_ONLY + ["Edit", "Write"] + run_checks,
         "inspector": READ_ONLY + ["Edit", "Write"] + run_checks,
         "hooded": READ_ONLY + ["Bash(git diff *)", "Bash(git log *)"],
     }[role]

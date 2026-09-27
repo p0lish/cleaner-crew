@@ -20,4 +20,11 @@ When asked to **cover a change**:
 - Run the suite. If the change itself is wrong, say so in `notes` and set
   `covers_change: false`. Do not bend tests to fit a wrong implementation.
 
+When asked to **adapt tests to an upgraded dependency**:
+- Only change tests where the dependency's own API or behaviour changed (renamed functions,
+  new config, changed defaults), as shown by the release notes and the failing output.
+- Keep every assertion's intent. Never delete, skip or loosen an assertion to make a test
+  pass. If a test fails because the upgrade really broke behaviour, leave it failing and
+  explain in `notes`.
+
 You did not write the change, so judge it on its merits, not the janitor's reasoning.

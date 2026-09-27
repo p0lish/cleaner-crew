@@ -20,7 +20,7 @@ import sys
 from pathlib import Path
 
 from ..models import Category
-from ..policy import CREW_PATHS, Policy, matches
+from ..policy import CREW_PATHS, LOCKFILE_GLOBS, Policy, matches
 
 WRITE_TOOLS = {"Edit", "Write", "NotebookEdit", "MultiEdit"}
 READ_TOOLS = {"Read", "Grep", "Glob"}
@@ -37,6 +37,12 @@ BASH_DENY = [
     r"(^|\s)(cat|less|head|tail|cp|mv)\s+[^|;&]*\.env\b",
     r"\brm\s+-[a-z]*r[a-z]*f?\s+(/|~|\.\.)",
     r"\bgh\s|\bglab\s",
+    # package installs need the network and run install scripts; only the orchestrator's
+    # supply run does that
+    r"\b(npm|pnpm|yarn|bun)\s+(install|i|add|ci|update|up|upgrade)\b",
+    r"\bpip3?\s+install\b",
+    r"\buv\s+(add|pip|sync|lock)\b",
+    r"\bnpx\s+(-y|--yes)\b",
 ]
 
 
@@ -75,10 +81,12 @@ def check(event: dict, role: str, worktree: Path, policy: Policy,
                 return f"the {role} role is read-only"
             if matches(rel, CREW_PATHS):
                 return f"{rel} is crew configuration and cannot be edited by agents"
+            if matches(rel, LOCKFILE_GLOBS):
+                return f"{rel} is a lockfile; only the package manager may write it"
             if policy.is_forbidden(rel, category):
                 return f"{rel} is a forbidden path in policy.yml"
             is_test = policy.is_test(rel)
-            if role == "janitor" and is_test:
+            if role in ("janitor", "quartermaster") and is_test:
                 return f"{rel} is a test; tests are the inspector's job"
             if role == "inspector" and not is_test:
                 return f"{rel} is not a test file; inspectors only write tests"

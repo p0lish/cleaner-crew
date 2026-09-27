@@ -73,5 +73,6 @@ class GitLab(CodeHost):
             return False, f"{branch} is not protected"
         if r.status_code != 200:
             return None, f"cannot read protection for {branch} ({r.status_code})"
-        pushers = [a.get("access_level_description") for a in r.json().get("push_access_levels", [])]
+        pushers = [a.get("access_level_description")
+                   for a in r.json().get("push_access_levels", [])]
         return True, f"{branch} protected; push allowed for: {', '.join(pushers) or 'no one'}"

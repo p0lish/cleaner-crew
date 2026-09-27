@@ -18,8 +18,8 @@ from rich.table import Table
 
 from . import CREW_DIR
 from .adapters import make_code_host
-from .config import (CodeHostConfig, CommandsConfig, Config, RunConfig, TrackerConfig,
-                     load_secrets)
+from .claude import ROLES
+from .config import CodeHostConfig, CommandsConfig, Config, RunConfig, TrackerConfig, load_secrets
 from .detect import detect_stack, run_command
 from .gitutil import default_branch, origin
 from .models import ConnectionReport
@@ -59,8 +59,8 @@ def _write(path: Path, content: str, overwrite: bool = False) -> None:
 def _save_secret(root: Path, name: str, value: str) -> None:
     path = root / CREW_DIR / "secrets.env"
     path.parent.mkdir(parents=True, exist_ok=True)
-    lines = [l for l in (path.read_text().splitlines() if path.exists() else [])
-             if not l.startswith(f"{name}=")]
+    lines = [line for line in (path.read_text().splitlines() if path.exists() else [])
+             if not line.startswith(f"{name}=")]
     lines.append(f"{name}={value}")
     path.write_text("\n".join(lines) + "\n")
     path.chmod(0o600)
@@ -187,6 +187,15 @@ def setup_commands(root: Path) -> tuple[CommandsConfig, bool]:
     lint = Prompt.ask("  lint command (empty for none)",
                       default=stack.lint if stack else "", show_default=True)
     cmds = CommandsConfig(test=test, lint=lint or "")
+    if stack:
+        cmds.ci_install, cmds.install = stack.ci_install, stack.install
+        cmds.outdated, cmds.post_install = stack.outdated, list(stack.post_install)
+        for label, value in (("install (CI)", cmds.ci_install), ("upgrade", cmds.install),
+                             ("outdated", cmds.outdated),
+                             ("post-install", " && ".join(cmds.post_install))):
+            if value:
+                console.print(f"  {label}: [dim]{value}[/]")
+        console.print("  [dim](edit these under `commands:` in config.yml)[/]")
 
     console.print("  running the test suite once to check the baseline is green...")
     res = run_command(cmds.test, root, cmds.test_timeout_s)
@@ -197,6 +206,12 @@ def setup_commands(root: Path) -> tuple[CommandsConfig, bool]:
     console.print("  [yellow]The crew relies on a green baseline to tell its own breakage from "
                   "existing failures. It will be installed disabled (run.enabled: false).[/]")
     return cmds, False
+
+
+def install_steps(cmds: CommandsConfig) -> str:
+    """GitHub Actions steps that install the project's toolchain before the crew runs."""
+    lines = [f"      - run: {c}" for c in [cmds.ci_install, *cmds.post_install] if c]
+    return "\n".join(lines) or "      # add steps here that install your project's dependencies"
 
 
 def setup_runner(root: Path, cfg: Config) -> str:
@@ -212,12 +227,21 @@ def setup_runner(root: Path, cfg: Config) -> str:
                            "JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}\n"
                            "          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}")
             wf = (_template("ci", "github.yml").replace("__TRACKER_ENV__", tracker_env)
-                  .replace("__PACKAGE_SPEC__", spec))
+                  .replace("__PACKAGE_SPEC__", spec)
+                  .replace("__INSTALL_STEPS__", install_steps(cfg.commands)))
             _write(root / ".github" / "workflows" / "cleaner-crew.yml", wf)
-            secrets = ["ANTHROPIC_API_KEY"] + (["LINEAR_API_KEY"] if cfg.tracker.kind == "linear"
-                                               else ["JIRA_EMAIL", "JIRA_API_TOKEN"])
-            console.print("  add repository secrets: " + ", ".join(secrets))
-            console.print("  (e.g. `gh secret set ANTHROPIC_API_KEY`)")
+            auth = Prompt.ask("  how should CI log in to Claude?",
+                              choices=["subscription", "api-key"], default="subscription")
+            secrets = ["CLAUDE_CODE_OAUTH_TOKEN" if auth == "subscription" else
+                       "ANTHROPIC_API_KEY", "CLEANER_CREW_TOKEN"] + (
+                ["LINEAR_API_KEY"] if cfg.tracker.kind == "linear"
+                else ["JIRA_EMAIL", "JIRA_API_TOKEN"])
+            console.print("  add repository secrets (`gh secret set NAME`): " + ", ".join(secrets))
+            if auth == "subscription":
+                console.print("    CLAUDE_CODE_OAUTH_TOKEN: run `claude setup-token` (Pro/Max)")
+            console.print(f"    CLEANER_CREW_TOKEN: fine-grained token for {cfg.code_host.repo} "
+                          "with Contents + Pull requests read/write\n"
+                          "      https://github.com/settings/personal-access-tokens")
         else:
             console.print("  create a pipeline schedule with CLEANER_CREW=1")
 
@@ -258,6 +282,15 @@ def setup_protection(root: Path, cfg: Config, spec: str) -> None:
     mark = {True: "[green]✓[/]", False: "[red]✗[/]", None: "[yellow]?[/]"}[protected]
     console.print(f"  {mark} {detail}")
     if protected:
+        return
+    if "GitHub Free" in detail:
+        _write(root / ".github" / "workflows" / "cleaner-crew-watchdog.yml",
+               _template("ci", "github-watchdog.yml").replace("__DEFAULT_BRANCH__", base))
+        console.print(
+            "  Without branch protection nothing enforces reviews or cleaner-crew-verify.\n"
+            "  Safeguards in place: the crew only pushes cleaner-crew/* branches, every PR stays\n"
+            "  a draft (trust capped), and the watchdog workflow flags crew commits that reach\n"
+            f"  {base} without a pull request. The real fix: GitHub Pro, or a public repo.")
         return
     if cfg.code_host.kind == "github":
         console.print(
@@ -302,7 +335,7 @@ def init(root: Path) -> None:
     _write(root / CREW_DIR / "config.yml", cfg.dump(), overwrite=True)
     _write(root / CREW_DIR / "policy.yml", _template("policy.yml"))
     _write(root / CREW_DIR / ".gitignore", GITIGNORE, overwrite=True)
-    for role in ("scout", "manager", "janitor", "inspector", "hooded"):
+    for role in ROLES:
         _write(root / ".claude" / "agents" / f"cleaner-crew-{role}.md",
                _template("agents", f"{role}.md"))
 
@@ -314,7 +347,8 @@ def init(root: Path) -> None:
         "Next:\n"
         f"  1. review {CREW_DIR}/policy.yml (what the crew is allowed to ship)\n"
         f"  2. label a couple of tickets '{tracker.candidate_label}'. Scout findings arrive as "
-        f"'{tracker.proposed_label}';\n     add '{tracker.candidate_label}' to the ones you want done\n"
+        f"'{tracker.proposed_label}';\n"
+        f"     add '{tracker.candidate_label}' to the ones you want done\n"
         "  3. cleaner-crew run --dry-run    (plans only; nothing is claimed or pushed)\n"
         "  4. commit .cleaner-crew/ and .claude/agents/ so CI and teammates share the setup\n"
         f"Kill switch: touch {CREW_DIR}/STOP  (or set run.enabled: false)")

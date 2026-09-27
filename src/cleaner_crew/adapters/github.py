@@ -42,7 +42,8 @@ class GitHub(CodeHost):
             return ConnectionReport(False, "github", login,
                                     f"repo {self.repo} not accessible ({r.status_code})")
         perms = r.json().get("permissions", {})
-        missing = [] if perms.get("push") else ["push access (contents: write, pull_requests: write)"]
+        missing = [] if perms.get("push") else [
+            "push access (contents: write, pull_requests: write)"]
         return ConnectionReport(not missing, "github", login, f"repo {self.repo}", missing)
 
     def count_open_mrs(self, branch_prefix: str) -> int:
@@ -68,7 +69,7 @@ class GitHub(CodeHost):
         for pr in r.json():
             if not pr["head"]["ref"].startswith(branch_prefix) or len(out) >= limit:
                 continue
-            cat = category_from_labels([l["name"] for l in pr.get("labels", [])])
+            cat = category_from_labels([label["name"] for label in pr.get("labels", [])])
             if cat is None:
                 continue
             commits = self.http.get(f"/repos/{self.repo}/pulls/{pr['number']}/commits",
@@ -80,18 +81,38 @@ class GitHub(CodeHost):
         return out
 
     def branch_protection(self, branch: str) -> tuple[bool | None, str]:
-        r = self.http.get(f"/repos/{self.repo}/branches/{branch}")
-        if r.status_code != 200:
-            return None, f"cannot read branch {branch} ({r.status_code})"
-        if not r.json().get("protected"):
-            return False, f"{branch} is not protected"
-        r = self.http.get(f"/repos/{self.repo}/branches/{branch}/protection")
-        if r.status_code != 200:
-            return True, f"{branch} is protected (details need admin rights)"
-        p = r.json()
-        checks = (p.get("required_status_checks") or {}).get("contexts", [])
-        reviews = (p.get("required_pull_request_reviews") or {}).get(
-            "required_approving_review_count", 0)
-        detail = f"{reviews} required review(s); required checks: {', '.join(checks) or 'none'}"
-        return bool(reviews) and any("cleaner-crew" in c for c in checks), detail
+        """Combines classic branch protection and rulesets (whichever the repo uses)."""
+        reviews, checks, sources = 0, set(), []
 
+        r = self.http.get(f"/repos/{self.repo}/branches/{branch}/protection")
+        if r.status_code == 403 and "Upgrade to GitHub Pro" in r.text:
+            return False, ("branch protection is unavailable for this private repo on "
+                           "GitHub Free (upgrade to Pro or make it public)")
+        if r.status_code == 200:
+            p = r.json()
+            reviews = (p.get("required_pull_request_reviews") or {}).get(
+                "required_approving_review_count", 0)
+            checks |= set((p.get("required_status_checks") or {}).get("contexts", []))
+            sources.append("branch protection")
+        elif r.status_code not in (404, 403):
+            return None, f"cannot read protection for {branch} ({r.status_code})"
+
+        r = self.http.get(f"/repos/{self.repo}/rules/branches/{branch}")
+        if r.status_code == 200 and r.json():
+            for rule in r.json():
+                params = rule.get("parameters") or {}
+                if rule.get("type") == "pull_request":
+                    reviews = max(reviews, params.get("required_approving_review_count", 0))
+                elif rule.get("type") == "required_status_checks":
+                    checks |= {c.get("context", "")
+                               for c in params.get("required_status_checks", [])}
+            sources.append("rulesets")
+
+        if not sources:
+            return False, f"{branch} is not protected"
+        crew_check = any("cleaner-crew" in c for c in checks)
+        detail = (f"{branch} via {' + '.join(sources)}: {reviews} required review(s); "
+                  f"required checks: {', '.join(sorted(checks)) or 'none'}")
+        if not crew_check:
+            detail += " (cleaner-crew-verify is not required)"
+        return bool(reviews) and crew_check, detail

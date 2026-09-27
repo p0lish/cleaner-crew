@@ -7,6 +7,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import BRANCH_PREFIX
 from .models import DiffStats, FileChange
 
 
@@ -106,9 +107,15 @@ def branch_commit_messages(wt: Path, base: str, head: str = "HEAD") -> list[str]
     return [m.strip() + "\n" for m in out.split("\x1e") if m.strip()]
 
 
-def diff_text(wt: Path, base: str) -> str:
-    return git("diff", f"origin/{base}...HEAD", cwd=wt)
+def diff_text(wt: Path, base: str, exclude: list[str] | None = None) -> str:
+    spec = ["--", "."] + [f":(exclude,glob){g}" for g in exclude or []]
+    return git("diff", f"origin/{base}...HEAD", *spec, cwd=wt)
 
 
 def push(wt: Path, branch: str) -> None:
-    git("push", "--force-with-lease", "-u", "origin", branch, cwd=wt)
+    # The crew's token can usually push anywhere (fine-grained tokens can't be limited by
+    # branch), so this is the line that keeps it on its own branches.
+    if not branch.startswith(BRANCH_PREFIX) or len(branch) <= len(BRANCH_PREFIX):
+        raise RuntimeError(f"refusing to push {branch!r}: crew only pushes {BRANCH_PREFIX}*")
+    git("push", "--force-with-lease", "origin", f"refs/heads/{branch}:refs/heads/{branch}",
+        cwd=wt)

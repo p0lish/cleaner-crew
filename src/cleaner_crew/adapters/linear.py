@@ -67,7 +67,7 @@ class Linear(TaskSource):
     def _task(self, n: dict) -> Task:
         return Task(id=n["id"], key=n["identifier"], title=n["title"],
                     description=n.get("description") or "", url=n["url"],
-                    labels=[l["name"] for l in n["labels"]["nodes"]],
+                    labels=[label["name"] for label in n["labels"]["nodes"]],
                     fingerprint=extract_fingerprint(n.get("description") or ""))
 
     def _update(self, task: Task, **input_) -> None:
@@ -116,7 +116,8 @@ class Linear(TaskSource):
     def create_finding(self, finding: Finding) -> Task:
         body = (f"{finding.description}\n\n**Category:** {finding.category.value}  \n"
                 f"**Files:** {', '.join(f'`{f}`' for f in finding.files)}\n\n"
-                f"_Proposed by the cleaner-crew scout. Add the `{self.cfg.candidate_label}` label to let "
+                f"_Proposed by the cleaner-crew scout. Add the `{self.cfg.candidate_label}` "
+                "label to let "
                 f"the crew work on it._ {fingerprint_marker(finding.fingerprint)}")
         n = self._q(
             "mutation($in:IssueCreateInput!){issueCreate(input:$in)"

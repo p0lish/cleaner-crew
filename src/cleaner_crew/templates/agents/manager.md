@@ -22,6 +22,11 @@ If you accept, read the relevant code first, then write a plan with concrete ste
 you expect to change, acceptance criteria and a test strategy. Keep the plan minimal:
 the smallest change that fully resolves the ticket.
 
+For a **dependency-upgrade**, set `package` to the exact package name and `target_version`
+to the exact version (e.g. `1.55.0`, no range or `v` prefix). Upgrade one package per
+ticket. The orchestrator installs it and checks the version jump against policy; you plan
+the code migration. For every other category leave both fields empty.
+
 ## Final verdict
 
 You receive the plan, the janitor's summary, the inspector's and hooded agent's reports,

@@ -1,70 +1,81 @@
-# This workflow will upload a Python Package to PyPI when a release is created
-# For more information see: https://docs.github.com/en/actions/automating-builds-and-tests/building-and-testing-python#publishing-to-package-registries
+# Release pipeline. Push a tag vX.Y.Z (scripts/release.sh does it) and this workflow:
+#   runs the full CI -> checks the tag matches __version__ -> builds -> publishes to PyPI
+#   (trusted publishing, `pypi` environment) -> creates the GitHub release with the dists.
+#
+# Keep this filename and the `pypi` environment name: PyPI's trusted publisher for
+# cleaner-crew is registered against them.
 
-# This workflow uses actions that are not certified by GitHub.
-# They are provided by a third-party and are governed by
-# separate terms of service, privacy policy, and support
-# documentation.
-
-name: Upload Python Package
+name: release
 
 on:
-  release:
-    types: [published]
+  push:
+    tags: ["v*"]
 
 permissions:
   contents: read
 
 jobs:
-  release-build:
-    runs-on: ubuntu-latest
+  ci:
+    uses: ./.github/workflows/ci.yml
 
+  build:
+    needs: ci
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.x"
-
-      - name: Build release distributions
+      - uses: astral-sh/setup-uv@v6
+      - name: Tag matches package version
+        id: version
         run: |
-          # NOTE: put your own distribution build steps here.
-          python -m pip install build
-          python -m build
-
-      - name: Upload distributions
-        uses: actions/upload-artifact@v4
+          version=$(sed -n 's/^__version__ = "\(.*\)"/\1/p' src/cleaner_crew/__init__.py)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match __version__ $version"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - run: uv build
+      - uses: actions/upload-artifact@v4
         with:
           name: release-dists
           path: dist/
 
   pypi-publish:
+    needs: build
     runs-on: ubuntu-latest
-    needs:
-      - release-build
     permissions:
-      # IMPORTANT: this permission is mandatory for trusted publishing
-      id-token: write
-
-    # Dedicated environments with protections for publishing are strongly recommended.
-    # For more information, see: https://docs.github.com/en/actions/deployment/targeting-different-environments/using-environments-for-deployment#deployment-protection-rules
+      id-token: write  # trusted publishing
     environment:
       name: pypi
-      # OPTIONAL: uncomment and update to include your PyPI project URL in the deployment status:
-      # url: https://pypi.org/p/YOURPROJECT
-      #
-      # ALTERNATIVE: if your GitHub Release name is the PyPI project version string
-      # ALTERNATIVE: exactly, uncomment the following line instead:
-      # url: https://pypi.org/project/YOURPROJECT/${{ github.event.release.name }}
-
+      url: https://pypi.org/project/cleaner-crew/${{ needs.build.outputs.version }}/
     steps:
-      - name: Retrieve release distributions
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
           name: release-dists
           path: dist/
-
-      - name: Publish release distributions to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/
+
+  github-release:
+    needs: [build, pypi-publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-dists
+          path: dist/
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* --verify-tag --generate-notes \
+              --title "$GITHUB_REF_NAME"
+          fi

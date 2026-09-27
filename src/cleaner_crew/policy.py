@@ -33,6 +33,13 @@ DEFAULT_TEST_GLOBS = [
 # The crew must never change its own rules or agent definitions, whatever policy.yml says.
 CREW_PATHS = [".cleaner-crew/**", ".claude/**", ".git/**", ".mcp.json"]
 
+# Lockfiles are only ever written by the package manager during the orchestrator's supply
+# run, never by an agent. They don't count towards size limits (they're machine-generated);
+# the hooded agent reviews their content through a structured diff instead.
+LOCKFILE_GLOBS = ["**/package-lock.json", "**/pnpm-lock.yaml", "**/yarn.lock", "**/bun.lock",
+                  "**/bun.lockb", "**/uv.lock", "**/poetry.lock", "**/Cargo.lock", "**/go.sum",
+                  "**/Gemfile.lock", "**/composer.lock"]
+
 # Fraction of a size limit above which a passing change is still downgraded to a draft MR.
 NEAR_LIMIT = 0.8
 
@@ -106,6 +113,9 @@ class TrustConfig:
     min_samples: int = 5       # below this, a category stays at draft
     promote_at: float = 0.8    # merged-without-changes rate to earn "ready"
     demote_below: float = 0.5  # below this rate a category falls back to "shadow"
+    # Without enforced review + required checks on the default branch (e.g. a private repo
+    # on GitHub Free), nothing stops an unverified merge, so stay at draft.
+    require_protection_for_ready: bool = True
 
 
 @dataclass
@@ -182,6 +192,7 @@ class Evidence:
     hooded_approved: bool = False
     hooded_max_severity: str = "none"  # none|low|medium|high|critical
     mutation_score: float | None = None  # None = not run / no mutable lines
+    bump_kind: str | None = None  # dependency upgrades: patch|minor|major|unknown
 
 
 @dataclass
@@ -219,7 +230,8 @@ def _static(policy: Policy, category: Category, diff: DiffStats, g: _Gate) -> No
     if forbidden:
         g.bump(Verdict.ESCALATE, f"touches forbidden paths: {', '.join(forbidden)}")
 
-    n_files, n_lines = len(diff.files), diff.total_lines
+    sized = [f for f in diff.files if not matches(f.path, LOCKFILE_GLOBS)]
+    n_files, n_lines = len(sized), sum(f.added + f.removed for f in sized)
     if n_files > policy.max_files_changed:
         g.bump(Verdict.ESCALATE, f"{n_files} files changed (limit {policy.max_files_changed})")
     elif n_files > policy.max_files_changed * NEAR_LIMIT:
@@ -229,7 +241,9 @@ def _static(policy: Policy, category: Category, diff: DiffStats, g: _Gate) -> No
     elif n_lines > policy.max_diff_lines * NEAR_LIMIT:
         g.bump(Verdict.DRAFT, f"{n_lines} diff lines, close to limit")
 
-    if rule.new_or_changed_test and not any(policy.is_test(p) for p in diff.paths):
+    # Upgrades are verified by the existing suite; they don't need new tests.
+    if (rule.new_or_changed_test and category is not Category.DEPENDENCY_UPGRADE
+            and not any(policy.is_test(p) for p in diff.paths)):
         g.bump(Verdict.REJECT, "no new or changed test covers the change")
 
 
@@ -249,6 +263,10 @@ def evaluate(policy: Policy, ev: Evidence) -> GateResult:
 
     if rule.require_repro_test and ev.repro_confirmed is not True:
         g.bump(Verdict.ESCALATE, "bug could not be reproduced with a failing test first")
+
+    if ev.category is Category.DEPENDENCY_UPGRADE and ev.bump_kind not in rule.allowed:
+        g.bump(Verdict.ESCALATE, f"{ev.bump_kind} version bump is not in allowed "
+                                 f"{rule.allowed} for dependency upgrades")
 
     if rule.require_benchmark and not ev.benchmark_reported:
         g.bump(Verdict.DRAFT, "no benchmark evidence for performance change")
