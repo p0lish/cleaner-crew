@@ -1,0 +1,49 @@
+name: cleaner-crew
+
+on:
+  schedule:
+    - cron: "17 3 * * 1-5"   # weekday nights
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Plan only, change nothing"
+        type: boolean
+        default: false
+
+concurrency:
+  group: cleaner-crew
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  crew:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install -g @anthropic-ai/claude-code
+      # Install your project's own toolchain here so the test command works.
+      - name: Run cleaner crew
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          __TRACKER_ENV__
+        run: |
+          git config user.name "Cleaner Crew"
+          git config user.email "cleaner-crew@users.noreply.github.com"
+          uvx --from "__PACKAGE_SPEC__" cleaner-crew run ${{ inputs.dry_run && '--dry-run' || '' }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cleaner-crew-audit
+          path: .cleaner-crew/runs/
+          retention-days: 30

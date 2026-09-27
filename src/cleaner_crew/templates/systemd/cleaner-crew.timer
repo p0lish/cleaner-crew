@@ -1,0 +1,10 @@
+[Unit]
+Description=Periodic Cleaner Crew run for __REPO_NAME__
+
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=__INTERVAL__s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

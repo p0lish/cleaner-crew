@@ -1,0 +1,44 @@
+# Cleaner Crew policy: the deterministic gate every change must pass.
+# Agents cannot edit this file (the guard blocks .cleaner-crew/** for all roles).
+
+limits:
+  max_files_changed: 8
+  max_diff_lines: 300
+  max_open_mrs: 3            # stop opening MRs until humans review the existing ones
+  max_cost_per_task_usd: 2
+
+forbidden_paths:             # touching any of these means "escalate to a human"
+  - "**/migrations/**"
+  - ".github/**"
+  - ".gitlab-ci.yml"
+  - "**/auth/**"
+  - "**/security/**"
+  - "infra/**"
+  - "terraform/**"
+  - "**/Dockerfile"
+  - "**/*.lock"
+  - "**/package-lock.json"
+  - "**/pnpm-lock.yaml"
+  - "**/uv.lock"
+  - "**/go.sum"
+
+require:
+  hooded_approval: true
+
+# Extra test globs can be listed under `test_globs:`; the defaults cover common layouts.
+
+categories:
+  bugfix:
+    require_repro_test: true
+  docs-gap:
+    tests_pass: true
+    new_or_changed_test: false
+  cleanup:
+    new_or_changed_test: false
+  perf:
+    enabled: false           # enable once you trust the crew with benchmarks
+    require_benchmark: true
+  dependency-upgrade:
+    enabled: false           # Renovate/Dependabot usually do this better
+    allowed: [patch, minor]
+    allow_paths: ["**/*.lock", "**/package-lock.json", "**/pnpm-lock.yaml", "**/uv.lock", "**/go.sum"]

@@ -1,0 +1,25 @@
+# Include from .gitlab-ci.yml:  include: { local: .cleaner-crew/ci/gitlab.yml }
+# Create a pipeline schedule (CI/CD > Schedules) with CLEANER_CREW=1.
+# Required CI/CD variables (masked): ANTHROPIC_API_KEY, GITLAB_TOKEN (project access
+# token with api + write_repository, Developer role), plus the tracker token(s).
+
+cleaner-crew:
+  image: ghcr.io/astral-sh/uv:python3.12-bookworm
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule" && $CLEANER_CREW == "1"'
+  resource_group: cleaner-crew
+  timeout: 90m
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq nodejs npm git >/dev/null
+    - npm install -g @anthropic-ai/claude-code
+    - git config user.name "Cleaner Crew"
+    - git config user.email "cleaner-crew@noreply.invalid"
+    - git remote set-url origin "https://oauth2:${GITLAB_TOKEN}@${CI_SERVER_HOST}/${CI_PROJECT_PATH}.git"
+    - git fetch origin "+refs/heads/${CI_DEFAULT_BRANCH}:refs/remotes/origin/${CI_DEFAULT_BRANCH}"
+    - git remote set-head origin "${CI_DEFAULT_BRANCH}"
+  script:
+    - uvx --from "__PACKAGE_SPEC__" cleaner-crew run ${CLEANER_CREW_DRY_RUN:+--dry-run}
+  artifacts:
+    when: always
+    paths: [.cleaner-crew/runs/]
+    expire_in: 30 days

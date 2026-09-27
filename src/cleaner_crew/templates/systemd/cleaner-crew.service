@@ -1,0 +1,9 @@
+[Unit]
+Description=Cleaner Crew run for __REPO_NAME__
+
+[Service]
+Type=oneshot
+WorkingDirectory=__REPO_ROOT__
+ExecStart=__EXECUTABLE__ run
+# Secrets come from __REPO_ROOT__/.cleaner-crew/secrets.env (loaded by cleaner-crew itself).
+Nice=10
