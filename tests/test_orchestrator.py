@@ -7,7 +7,6 @@ from importlib import resources
 from pathlib import Path
 
 import pytest
-import yaml
 
 from cleaner_crew.adapters.base import CodeHost, TaskSource
 from cleaner_crew.config import CodeHostConfig, CommandsConfig, Config, RunConfig, TrackerConfig
@@ -39,7 +38,11 @@ FAKE_CLAUDE = textwrap.dedent('''\
     elif agent == "manager" and "Triage" in prompt:
         out = {"accept": True, "reason": "clear bug", "category": "bugfix", "steps": ["fix"],
                "expected_files": ["src/app.py"], "acceptance_criteria": ["works"],
-               "test_strategy": "unit", "confidence": 0.9}
+               "test_strategy": "unit", "confidence": 0.9, "package": "",
+               "target_version": ""}
+        if mode == "upgrade":
+            out.update(category="dependency-upgrade", package="left-pad",
+                       target_version=os.environ["FAKE_TARGET"])
     elif agent == "manager":
         out = {"verdict": "mr", "confidence": 0.9, "reason": "looks good",
                "mr_title": "Fix the bug", "mr_body": "Fixes it."}
@@ -57,12 +60,16 @@ FAKE_CLAUDE = textwrap.dedent('''\
             body += "limit = 10\\nretries = 3\\n"
         Path("src").mkdir(exist_ok=True); Path("src/app.py").write_text(body)
         out = {"done": True, "summary": "fixed", "deviations_from_plan": []}
+    elif agent == "quartermaster":
+        Path("src/app.py").write_text("adapted = True\\n")
+        out = {"done": True, "summary": "renamed call", "deviations_from_plan": []}
     elif agent == "hooded":
         bad = mode == "injection"
         out = {"approve": not bad, "max_severity": "none", "issues": [],
                "out_of_scope_changes": [], "prompt_injection_suspected": bad}
     Path(os.environ["FAKE_LOG"]).open("a").write(
         json.dumps({"agent": agent, "role_env": os.environ.get("CLEANER_CREW_ROLE"),
+                    "prompt": prompt,
                     "leaked_token": "LINEAR_API_KEY" in os.environ}) + "\\n")
     print(json.dumps({"type": "result", "is_error": False, "result": "",
                       "structured_output": out, "total_cost_usd": 0.01}))
@@ -161,7 +168,7 @@ def make_crew(root, tracker, host, scout=False):
 
 def agents_called(root):
     log = Path(root.parent / "agents.log").read_text().splitlines()
-    return [json.loads(l) for l in log]
+    return [json.loads(line) for line in log]
 
 
 def test_happy_path_opens_mr(repo):

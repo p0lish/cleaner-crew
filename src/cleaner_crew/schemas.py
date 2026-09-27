@@ -33,6 +33,8 @@ PLAN = _obj({
     "acceptance_criteria": _strs,
     "test_strategy": _str,
     "confidence": _conf,
+    "package": _str,         # dependency-upgrade only, else ""
+    "target_version": _str,  # dependency-upgrade only, else ""
 })
 
 REPRO = _obj({"reproduced": _bool, "test_files": _strs, "test_command": _str, "notes": _str})

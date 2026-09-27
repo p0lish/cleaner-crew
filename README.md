@@ -17,6 +17,7 @@ manager ──► claim ──► triage + plan
              ├─► inspector   cover the change with tests (can only edit tests)
              ├─► tests + lint + diff + mutation testing, run by the orchestrator
              └─► hooded      read-only security review, can veto
+             (dependency upgrades: supply run → quartermaster → inspector, see below)
              │
 policy gate + manager verdict + trust level ──► MR │ draft MR │ shadow │ escalate │ reject
              │
@@ -86,6 +87,27 @@ lines (`==`→`!=`, `<`→`<=`, `n`→`n+1`, `and`→`or`, ...) and re-runs the 
 fewer than `mutation.min_score` of the mutants are caught, the MR becomes a draft, and
 the surviving mutants are listed in the MR.
 
+## Dependency upgrades
+
+Off by default. Enable `categories.dependency-upgrade` in `policy.yml`. The rule of this
+flow is that **network access and AI never mix**:
+
+1. **Scout** (no AI): runs `commands.outdated` (e.g. `npm outdated --json`) and proposes
+   upgrades whose semver jump is in `allowed` (patch/minor by default; 0.x minors count
+   as major). Patch upgrades come first. A human promotes them as usual.
+2. **Manager** plans the migration and names the exact package and version.
+3. **Policy** (code) checks the jump against the locked version. Majors go to a human.
+4. **Supply run** (orchestrator, network, no AI): `commands.install` with install scripts
+   disabled, then `commands.post_install` (e.g. `npx playwright install chromium`). It
+   verifies the lockfile now pins the target version and fetches release notes.
+5. **Quartermaster** (AI, no network): migrates the code to the new version using the
+   release notes. It cannot install anything, edit tests or write lockfiles.
+6. **Inspector** adapts tests only if the upgrade broke them, and never loosens assertions.
+7. **Hooded** gets a structured lockfile diff: new transitive packages and new install
+   scripts are called out for review.
+
+Lockfiles don't count towards size limits and are never shown raw to agents.
+
 ## Protecting the target repo
 
 The crew never merges. The repository's own protections are the real safety net:
@@ -99,7 +121,26 @@ The crew never merges. The repository's own protections are the real safety net:
   executes the MR's code.
 - **CODEOWNERS** for `/.cleaner-crew/`, `/.claude/` and CI config.
 
-`cleaner-crew doctor` reports whether the default branch is adequately protected.
+`cleaner-crew doctor` reports whether the default branch is adequately protected. Both
+classic branch protection and rulesets are recognised.
+
+**No branch protection available** (private repos on GitHub Free): nothing can enforce
+reviews or required checks. The crew then:
+- only ever pushes `cleaner-crew/*` branches (checked in code before every push)
+- caps every category at **draft**, so a human must click "Ready for review"
+  (`trust.require_protection_for_ready`)
+- installs `cleaner-crew-watchdog`, a workflow that fails loudly if a crew commit reaches
+  the default branch without a pull request
+
+The real fix is GitHub Pro or a public repo.
+
+### CI secrets (GitHub)
+
+| secret | what |
+|---|---|
+| `CLAUDE_CODE_OAUTH_TOKEN` *or* `ANTHROPIC_API_KEY` | `claude setup-token` for a Pro/Max subscription, or an API key |
+| `CLEANER_CREW_TOKEN` | fine-grained token for this repo: Contents + Pull requests read/write. PRs opened with the built-in `GITHUB_TOKEN` don't trigger other workflows, so `cleaner-crew-verify` would never run |
+| `LINEAR_API_KEY` *or* `JIRA_EMAIL` + `JIRA_API_TOKEN` | tracker access |
 
 ## Safety model
 
@@ -134,4 +175,23 @@ Customise agent behaviour by editing `.claude/agents/cleaner-crew-*.md` in the t
 ```sh
 uv sync
 uv run pytest
+uv run ruff check src tests
 ```
+
+CI (`.github/workflows/ci.yml`) runs lint, the tests on Python 3.11–3.14, and a packaging
+check (every template is in the wheel, and the installed wheel runs) on every push and PR.
+
+## Releasing
+
+1. Bump `__version__` in `src/cleaner_crew/__init__.py` in a pull request and merge it.
+   This is the only place the version lives.
+2. `git checkout main && git pull && scripts/release.sh`
+
+The script tags `main` as `vX.Y.Z` and pushes the tag. The `release` workflow then runs the
+full CI, checks that the tag matches `__version__`, builds, publishes to PyPI through
+trusted publishing (`pypi` environment), and creates the GitHub release with the
+distributions attached.
+
+## License
+
+[Apache License 2.0](LICENSE)

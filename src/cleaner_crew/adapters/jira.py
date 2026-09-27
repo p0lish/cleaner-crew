@@ -63,7 +63,7 @@ class Jira(TaskSource):
                                 json={"transition": {"id": match["id"]}}))
 
     def _labels(self, task: Task, add: list[str] = (), remove: list[str] = ()) -> None:
-        ops = [{"add": l} for l in add] + [{"remove": l} for l in remove]
+        ops = [{"add": label} for label in add] + [{"remove": label} for label in remove]
         self._ok(self.http.put(f"/issue/{task.key}", json={"update": {"labels": ops}}))
 
     def _assign(self, task: Task, account_id: str | None) -> None:

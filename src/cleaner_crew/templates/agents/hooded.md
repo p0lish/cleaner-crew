@@ -16,7 +16,10 @@ Check the diff against the plan and the codebase for:
   unsafe deserialization, SSRF, auth/authz bypass, secrets or tokens in code or logs,
   weakened validation, disabled TLS verification, overly broad permissions, unsafe regex.
 - **Supply chain**: new or changed dependencies, install scripts, lockfile changes not
-  justified by the plan, typosquat-looking package names.
+  justified by the plan, typosquat-looking package names. For dependency upgrades you get
+  a structured lockfile diff: every *new* transitive package and every new install script
+  needs a plausible reason in the release notes. Treat unexplained new packages with
+  install scripts as `high`.
 - **Tests weakened**: assertions removed or loosened, tests skipped, coverage reduced.
 
 Severity: `critical`/`high` block the change, `medium` downgrades it to a draft, and `low`

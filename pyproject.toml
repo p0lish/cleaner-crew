@@ -1,8 +1,10 @@
 [project]
 name = "cleaner-crew"
-version = "0.1.2"
+dynamic = ["version"]
 description = "Autonomous crew of Claude Code agents that picks up small, safe tasks and opens MRs."
 readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
 dependencies = [
     "typer>=0.12",
@@ -15,14 +17,28 @@ dependencies = [
 cleaner-crew = "cleaner_crew.cli:app"
 
 [dependency-groups]
-dev = ["pytest>=8", "respx>=0.21"]
+dev = [
+    "pytest>=8",
+    "respx>=0.21",
+    "ruff>=0.16.9",
+]
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "src/cleaner_crew/__init__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/cleaner_crew"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B"]

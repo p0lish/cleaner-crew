@@ -48,6 +48,10 @@ class CommandsConfig:
     test: str
     lint: str = ""
     test_timeout_s: int = 900
+    ci_install: str = ""  # installs the locked dependencies (CI, fresh worktrees)
+    install: str = ""  # upgrades one dependency; {package} and {version} are substituted
+    outdated: str = ""  # lists outdated dependencies as JSON (npm/pnpm/uv formats)
+    post_install: list[str] = field(default_factory=list)  # e.g. npx playwright install
 
 
 @dataclass
