@@ -51,8 +51,11 @@ def load_agent_definition(role: str, root: Path) -> dict:
         resources.files("cleaner_crew.templates.agents") / f"{role}.md").read_text()
     _, front, body = text.split("---", 2)
     meta = yaml.safe_load(front)
-    return {"description": meta["description"], "prompt": body.strip(),
-            "tools": meta.get("tools", ", ".join(READ_ONLY))}
+    # Frontmatter allows "Read, Grep"; the --agents JSON requires a list.
+    tools = meta.get("tools", READ_ONLY)
+    if isinstance(tools, str):
+        tools = [t.strip() for t in tools.split(",") if t.strip()]
+    return {"description": meta["description"], "prompt": body.strip(), "tools": tools}
 
 
 @dataclass

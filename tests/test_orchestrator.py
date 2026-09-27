@@ -20,7 +20,14 @@ FAKE_CLAUDE = textwrap.dedent('''\
     import json, os, sys
     from pathlib import Path
     argv = sys.argv
-    agent = argv[argv.index("--agent") + 1].removeprefix("cleaner-crew-")
+    name = argv[argv.index("--agent") + 1]
+    agent = name.removeprefix("cleaner-crew-")
+    # mirror the real CLI's --agents validation
+    definition = json.loads(argv[argv.index("--agents") + 1])[name]
+    if not (isinstance(definition["tools"], list)
+            and all(isinstance(t, str) for t in definition["tools"])):
+        print(f"Error: Invalid --agents configuration:\\n{name}.tools: Invalid input")
+        sys.exit(1)
     prompt = argv[argv.index("-p") + 1]
     mode = os.environ.get("FAKE_MODE", "good")
     out = None
