@@ -5,7 +5,7 @@ import subprocess
 
 import httpx
 
-from ..models import ConnectionReport
+from ..models import ConnectionReport, MrRecord, category_from_labels, is_crew_commit
 from .base import CodeHost
 
 
@@ -22,9 +22,8 @@ def github_token(token_env: str) -> str:
 
 
 class GitHub(CodeHost):
-    def __init__(self, repo: str, token: str, api_url: str = "https://api.github.com",
-                 label: str = "cleaner-crew"):
-        self.repo, self.label = repo, label
+    def __init__(self, repo: str, token: str, api_url: str = "https://api.github.com"):
+        self.repo = repo
         self.http = httpx.Client(
             base_url=api_url,
             headers={"Authorization": f"Bearer {token}",
@@ -51,11 +50,48 @@ class GitHub(CodeHost):
         r.raise_for_status()
         return sum(1 for pr in r.json() if pr["head"]["ref"].startswith(branch_prefix))
 
-    def open_mr(self, branch: str, base: str, title: str, body: str, draft: bool) -> str:
+    def open_mr(self, branch: str, base: str, title: str, body: str, draft: bool,
+                labels: list[str]) -> str:
         r = self.http.post(f"/repos/{self.repo}/pulls", json={
             "title": title, "head": branch, "base": base, "body": body, "draft": draft})
         r.raise_for_status()
         pr = r.json()
         self.http.post(f"/repos/{self.repo}/issues/{pr['number']}/labels",
-                       json={"labels": [self.label]})
+                       json={"labels": labels}).raise_for_status()
         return pr["html_url"]
+
+    def crew_mr_history(self, branch_prefix: str, limit: int = 100) -> list[MrRecord]:
+        r = self.http.get(f"/repos/{self.repo}/pulls", params={
+            "state": "closed", "sort": "updated", "direction": "desc", "per_page": 100})
+        r.raise_for_status()
+        out = []
+        for pr in r.json():
+            if not pr["head"]["ref"].startswith(branch_prefix) or len(out) >= limit:
+                continue
+            cat = category_from_labels([l["name"] for l in pr.get("labels", [])])
+            if cat is None:
+                continue
+            commits = self.http.get(f"/repos/{self.repo}/pulls/{pr['number']}/commits",
+                                    params={"per_page": 100})
+            commits.raise_for_status()
+            human = any(not is_crew_commit(c["commit"]["message"]) for c in commits.json())
+            out.append(MrRecord(cat, merged=pr.get("merged_at") is not None,
+                                changed_by_human=human, closed_at=pr["closed_at"]))
+        return out
+
+    def branch_protection(self, branch: str) -> tuple[bool | None, str]:
+        r = self.http.get(f"/repos/{self.repo}/branches/{branch}")
+        if r.status_code != 200:
+            return None, f"cannot read branch {branch} ({r.status_code})"
+        if not r.json().get("protected"):
+            return False, f"{branch} is not protected"
+        r = self.http.get(f"/repos/{self.repo}/branches/{branch}/protection")
+        if r.status_code != 200:
+            return True, f"{branch} is protected (details need admin rights)"
+        p = r.json()
+        checks = (p.get("required_status_checks") or {}).get("contexts", [])
+        reviews = (p.get("required_pull_request_reviews") or {}).get(
+            "required_approving_review_count", 0)
+        detail = f"{reviews} required review(s); required checks: {', '.join(checks) or 'none'}"
+        return bool(reviews) and any("cleaner-crew" in c for c in checks), detail
+

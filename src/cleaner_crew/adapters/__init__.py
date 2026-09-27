@@ -22,10 +22,10 @@ def make_code_host(cfg: Config) -> CodeHost:
         tok = github_token(c.token_env)
         if not tok:
             raise RuntimeError(f"no GitHub token: set {c.token_env} or run `gh auth login`")
-        return GitHub(c.repo, tok, c.api_url, c.mr_label)
+        return GitHub(c.repo, tok, c.api_url)
     if c.kind == "gitlab":
         from .gitlab import GitLab
-        return GitLab(c.repo, env(c.token_env), c.api_url, c.mr_label)
+        return GitLab(c.repo, env(c.token_env), c.api_url)
     raise ValueError(f"unknown code host kind: {c.kind}")
 
 

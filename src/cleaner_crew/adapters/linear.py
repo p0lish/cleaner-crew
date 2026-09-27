@@ -101,18 +101,28 @@ class Linear(TaskSource):
             "state:{type:{nin:[\"started\",\"completed\",\"canceled\"]}}})"
             f"{{nodes{{{ISSUE_FIELDS}}}}}}}",
             k=self.cfg.project, l=self.cfg.candidate_label, n=limit)["issues"]["nodes"]
-        blocked = {self.cfg.in_progress_label, self.cfg.rejected_label, self.cfg.escalated_label}
+        blocked = self.blocked_labels()
         return [t for t in map(self._task, nodes) if not blocked & set(t.labels)]
+
+    def find_issues(self, labels: list[str], open_only: bool, limit: int = 100) -> list[Task]:
+        state = ',state:{type:{nin:["completed","canceled"]}}' if open_only else ""
+        nodes = self._q(
+            "query($k:String!,$ls:[String!]!,$n:Int!){issues(first:$n,includeArchived:true,"
+            f"filter:{{team:{{key:{{eq:$k}}}},labels:{{name:{{in:$ls}}}}{state}}})"
+            f"{{nodes{{{ISSUE_FIELDS}}}}}}}",
+            k=self.cfg.project, ls=labels, n=limit)["issues"]["nodes"]
+        return [self._task(n) for n in nodes]
 
     def create_finding(self, finding: Finding) -> Task:
         body = (f"{finding.description}\n\n**Category:** {finding.category.value}  \n"
                 f"**Files:** {', '.join(f'`{f}`' for f in finding.files)}\n\n"
-                f"_Filed by cleaner-crew scout._ {fingerprint_marker(finding.fingerprint)}")
+                f"_Proposed by the cleaner-crew scout. Add the `{self.cfg.candidate_label}` label to let "
+                f"the crew work on it._ {fingerprint_marker(finding.fingerprint)}")
         n = self._q(
             "mutation($in:IssueCreateInput!){issueCreate(input:$in)"
             f"{{issue{{{ISSUE_FIELDS}}}}}}}",
             **{"in": {"teamId": self.team["id"], "title": finding.title, "description": body,
-                      "labelIds": [self._label_id(self.cfg.candidate_label)],
+                      "labelIds": [self._label_id(self.cfg.proposed_label)],
                       "stateId": self._state_id(self.cfg.status_todo)}},
         )["issueCreate"]["issue"]
         return self._task(n)
@@ -130,15 +140,8 @@ class Linear(TaskSource):
         self._update(task, stateId=self._state_id(self.cfg.status_in_review))
         self.comment(task, f"Cleaner crew opened a merge request: {mr_url}")
 
-    def _release(self, task: Task, label: str, reason: str) -> None:
+    def release(self, task: Task, label: str, comment: str) -> None:
         self._update(task, stateId=self._state_id(self.cfg.status_todo), assigneeId=None,
                      addedLabelIds=[self._label_id(label)],
                      removedLabelIds=[self._label_id(self.cfg.in_progress_label)])
-        self.comment(task, reason)
-
-    def reject(self, task: Task, reason: str) -> None:
-        self._release(task, self.cfg.rejected_label, f"Cleaner crew: not shipping this.\n\n{reason}")
-
-    def escalate(self, task: Task, reason: str) -> None:
-        self._release(task, self.cfg.escalated_label,
-                      f"Cleaner crew: this needs a human.\n\n{reason}")
+        self.comment(task, comment)

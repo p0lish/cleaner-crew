@@ -9,6 +9,10 @@ from ..models import ConnectionReport, Finding, Task, extract_fingerprint, finge
 from .base import TaskSource
 
 
+def _jql_list(values) -> str:
+    return ", ".join(f'"{v}"' for v in sorted(values))
+
+
 def adf(text: str) -> dict:
     """Minimal Atlassian Document Format: one paragraph per blank-line-separated block."""
     paras = [p for p in text.split("\n\n") if p.strip()]
@@ -47,6 +51,10 @@ class Jira(TaskSource):
                     labels=f.get("labels", []), fingerprint=extract_fingerprint(desc))
 
     def _transition(self, task: Task, status: str) -> None:
+        current = self._ok(self.http.get(f"/issue/{task.key}", params={"fields": "status"})
+                           ).json()["fields"]["status"]["name"]
+        if current.lower() == status.lower():
+            return
         ts = self._ok(self.http.get(f"/issue/{task.key}/transitions")).json()["transitions"]
         match = next((t for t in ts if t["to"]["name"].lower() == status.lower()), None)
         if match is None:
@@ -83,9 +91,17 @@ class Jira(TaskSource):
 
     def fetch_candidates(self, limit: int = 20) -> list[Task]:
         c = self.cfg
-        jql = (f'project = "{c.project}" AND labels = "{c.candidate_label}" '
-               f'AND labels not in ("{c.in_progress_label}", "{c.rejected_label}", '
-               f'"{c.escalated_label}") AND statusCategory = "To Do" ORDER BY priority DESC')
+        return self._search(f'project = "{c.project}" AND labels = "{c.candidate_label}" '
+                            f'AND labels not in ({_jql_list(self.blocked_labels())}) '
+                            'AND statusCategory = "To Do" ORDER BY priority DESC', limit)
+
+    def find_issues(self, labels: list[str], open_only: bool, limit: int = 100) -> list[Task]:
+        jql = f'project = "{self.cfg.project}" AND labels in ({_jql_list(labels)})'
+        if open_only:
+            jql += ' AND statusCategory != "Done"'
+        return self._search(jql, limit)
+
+    def _search(self, jql: str, limit: int) -> list[Task]:
         r = self._ok(self.http.post("/search/jql", json={
             "jql": jql, "maxResults": limit,
             "fields": ["summary", "description", "labels"]})).json()
@@ -94,11 +110,12 @@ class Jira(TaskSource):
     def create_finding(self, finding: Finding) -> Task:
         body = (f"{finding.description}\n\nCategory: {finding.category.value}\n\n"
                 f"Files: {', '.join(finding.files)}\n\n"
-                f"Filed by cleaner-crew scout. {fingerprint_marker(finding.fingerprint)}")
+                f"Proposed by the cleaner-crew scout. Add the label '{self.cfg.candidate_label}' "
+                f"to let the crew work on it. {fingerprint_marker(finding.fingerprint)}")
         r = self._ok(self.http.post("/issue", json={"fields": {
             "project": {"key": self.cfg.project}, "summary": finding.title,
             "description": adf(body), "issuetype": {"name": "Task"},
-            "labels": [self.cfg.candidate_label]}})).json()
+            "labels": [self.cfg.proposed_label]}})).json()
         return self._task(self._ok(self.http.get(
             f"/issue/{r['key']}", params={"fields": "summary,description,labels"})).json())
 
@@ -116,15 +133,8 @@ class Jira(TaskSource):
         self._transition(task, self.cfg.status_in_review)
         self.comment(task, f"Cleaner crew opened a merge request: {mr_url}")
 
-    def _release(self, task: Task, label: str, reason: str) -> None:
+    def release(self, task: Task, label: str, comment: str) -> None:
         self._labels(task, add=[label], remove=[self.cfg.in_progress_label])
         self._assign(task, None)
         self._transition(task, self.cfg.status_todo)
-        self.comment(task, reason)
-
-    def reject(self, task: Task, reason: str) -> None:
-        self._release(task, self.cfg.rejected_label, f"Cleaner crew: not shipping this.\n\n{reason}")
-
-    def escalate(self, task: Task, reason: str) -> None:
-        self._release(task, self.cfg.escalated_label,
-                      f"Cleaner crew: this needs a human.\n\n{reason}")
+        self.comment(task, comment)

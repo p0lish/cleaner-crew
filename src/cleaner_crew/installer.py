@@ -21,7 +21,7 @@ from .adapters import make_code_host
 from .config import (CodeHostConfig, CommandsConfig, Config, RunConfig, TrackerConfig,
                      load_secrets)
 from .detect import detect_stack, run_command
-from .gitutil import origin
+from .gitutil import default_branch, origin
 from .models import ConnectionReport
 
 console = Console()
@@ -199,12 +199,13 @@ def setup_commands(root: Path) -> tuple[CommandsConfig, bool]:
     return cmds, False
 
 
-def setup_runner(root: Path, cfg: Config) -> None:
+def setup_runner(root: Path, cfg: Config) -> str:
     console.rule("[bold]5. Where should it run?")
     mode = Prompt.ask("  runner", choices=["ci", "local", "both", "none"], default="both")
-    spec = "cleaner-crew"
+    # Needed even for local-only mode: the verify check always runs in the repo's CI.
+    spec = Prompt.ask("  package spec for CI (PyPI name or git+https URL)",
+                      default="cleaner-crew")
     if mode in ("ci", "both"):
-        spec = Prompt.ask("  package spec for CI (PyPI name or git+https URL)", default=spec)
         if cfg.code_host.kind == "github":
             tracker_env = ("LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}"
                            if cfg.tracker.kind == "linear" else
@@ -218,10 +219,7 @@ def setup_runner(root: Path, cfg: Config) -> None:
             console.print("  add repository secrets: " + ", ".join(secrets))
             console.print("  (e.g. `gh secret set ANTHROPIC_API_KEY`)")
         else:
-            _write(root / CREW_DIR / "ci" / "gitlab.yml",
-                   _template("ci", "gitlab.yml").replace("__PACKAGE_SPEC__", spec))
-            console.print("  add `include: { local: .cleaner-crew/ci/gitlab.yml }` to "
-                          ".gitlab-ci.yml and create a pipeline schedule with CLEANER_CREW=1")
+            console.print("  create a pipeline schedule with CLEANER_CREW=1")
 
     if mode in ("local", "both"):
         exe = shutil.which("cleaner-crew") or f"{sys.executable} -m cleaner_crew"
@@ -238,6 +236,44 @@ def setup_runner(root: Path, cfg: Config) -> None:
             f"    • foreground loop:  cleaner-crew daemon\n"
             f"    • systemd timer:    ln -s {unit_dir}/cleaner-crew.{{service,timer}} "
             "~/.config/systemd/user/ && systemctl --user enable --now cleaner-crew.timer")
+    return spec
+
+
+def setup_protection(root: Path, cfg: Config, spec: str) -> None:
+    """The repo's own protections are the real safety net; the crew never merges."""
+    console.rule("[bold]6. Protecting the repository")
+    if cfg.code_host.kind == "github":
+        _write(root / ".github" / "workflows" / "cleaner-crew-verify.yml",
+               _template("ci", "github-verify.yml").replace("__PACKAGE_SPEC__", spec))
+    else:
+        _write(root / CREW_DIR / "ci" / "gitlab.yml",
+               _template("ci", "gitlab.yml").replace("__PACKAGE_SPEC__", spec))
+        console.print("  add `include: { local: .cleaner-crew/ci/gitlab.yml }` to .gitlab-ci.yml")
+
+    base = default_branch(root)
+    try:
+        protected, detail = make_code_host(cfg).branch_protection(base)
+    except Exception as e:  # noqa: BLE001
+        protected, detail = None, str(e)
+    mark = {True: "[green]✓[/]", False: "[red]✗[/]", None: "[yellow]?[/]"}[protected]
+    console.print(f"  {mark} {detail}")
+    if protected:
+        return
+    if cfg.code_host.kind == "github":
+        console.print(
+            f"  Configure branch protection on [bold]{base}[/] (Settings > Branches or rulesets):\n"
+            "    • require a pull request with at least 1 approving review\n"
+            "    • require status checks: [bold]cleaner-crew-verify[/] and your test workflow\n"
+            "    • dismiss stale approvals when new commits are pushed\n"
+            "    • do not allow bypassing the above")
+    else:
+        console.print(
+            f"  Protect [bold]{base}[/] (Settings > Repository > Protected branches):\n"
+            "    • allowed to push: No one; allowed to merge: Maintainers\n"
+            "    • Settings > Merge requests: 'Pipelines must succeed' and at least 1 approval")
+    console.print("  Add CODEOWNERS entries so crew-sensitive paths always need an owner:\n"
+                  "    /.cleaner-crew/  @your-team\n    /.claude/  @your-team\n"
+                  "    /.github/  @your-team   (or /.gitlab-ci.yml)")
 
 
 def _shell_cfg(root: Path, tracker: TrackerConfig | None = None,
@@ -270,13 +306,15 @@ def init(root: Path) -> None:
         _write(root / ".claude" / "agents" / f"cleaner-crew-{role}.md",
                _template("agents", f"{role}.md"))
 
-    setup_runner(root, cfg)
+    spec = setup_runner(root, cfg)
+    setup_protection(root, cfg, spec)
 
     console.rule("[bold]Done")
     console.print(
         "Next:\n"
         f"  1. review {CREW_DIR}/policy.yml (what the crew is allowed to ship)\n"
-        f"  2. label a couple of tickets '{tracker.candidate_label}'\n"
+        f"  2. label a couple of tickets '{tracker.candidate_label}'. Scout findings arrive as "
+        f"'{tracker.proposed_label}';\n     add '{tracker.candidate_label}' to the ones you want done\n"
         "  3. cleaner-crew run --dry-run    (plans only; nothing is claimed or pushed)\n"
         "  4. commit .cleaner-crew/ and .claude/agents/ so CI and teammates share the setup\n"
         f"Kill switch: touch {CREW_DIR}/STOP  (or set run.enabled: false)")

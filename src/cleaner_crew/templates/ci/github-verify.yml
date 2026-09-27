@@ -1,0 +1,30 @@
+name: cleaner-crew-verify
+
+# Required status check for crew PRs. Make it required in branch protection.
+# pull_request_target runs THIS file from the base branch, so a crew PR cannot edit the
+# check that judges it. It only reads the diff; no code from the PR is executed.
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  cleaner-crew-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Skip non-crew PRs
+        if: ${{ !startsWith(github.head_ref, 'cleaner-crew/') }}
+        run: echo "not a cleaner-crew branch"
+      - uses: actions/checkout@v4
+        if: ${{ startsWith(github.head_ref, 'cleaner-crew/') }}
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v6
+        if: ${{ startsWith(github.head_ref, 'cleaner-crew/') }}
+      - name: Verify against base branch policy
+        if: ${{ startsWith(github.head_ref, 'cleaner-crew/') }}
+        run: uvx --from "__PACKAGE_SPEC__" cleaner-crew verify --base "${{ github.base_ref }}"

@@ -62,6 +62,13 @@ def doctor() -> None:
                             + (f"missing: {', '.join(r.missing)}" if r.missing else ""))
         except Exception as e:  # noqa: BLE001
             row(name, False, str(e))
+    try:
+        from .gitutil import default_branch
+        protected, detail = make_code_host(cfg).branch_protection(default_branch(cfg.root))
+        row("branch protection", bool(protected),
+            detail + ("" if protected else " — see README: Protecting the target repo"))
+    except Exception as e:  # noqa: BLE001
+        row("branch protection", False, str(e))
     res = run_command(cfg.commands.test, cfg.root, cfg.commands.test_timeout_s)
     row("test baseline", res.ok, cfg.commands.test)
     enabled = [c for c, r in policy.categories.items() if r.enabled]
@@ -90,6 +97,39 @@ def run(dry_run: bool = typer.Option(False, "--dry-run", help="Plan only; claim/
         for o in outcomes:
             table.add_row(o.task, o.verdict, o.mr_url or "-", f"${o.cost_usd:.2f}")
         console.print(table)
+
+
+@app.command(name="trust")
+def trust_cmd() -> None:
+    """Show each category's earned trust level from recent MR history."""
+    from . import BRANCH_PREFIX, trust
+    from .adapters import make_code_host
+    from .models import Category
+
+    cfg, policy = _load()
+    history = make_code_host(cfg).crew_mr_history(
+        BRANCH_PREFIX, limit=policy.trust.window * len(Category))
+    table = Table("category", "enabled", "level", "max", "samples", "accepted", "why")
+    for cat, st in trust.compute(policy, history).items():
+        rule = policy.rule(cat)
+        table.add_row(cat.value, "yes" if rule.enabled else "no", st.level.value,
+                      rule.max_level.value, str(st.samples),
+                      f"{st.rate:.0%}" if st.rate is not None else "-", st.reason)
+    console.print(table)
+
+
+@app.command()
+def verify(base: str = typer.Option(..., help="Target branch of the MR, e.g. main.")) -> None:
+    """CI check for crew MRs: re-apply the base branch's policy to this branch's diff."""
+    from .verify import verify as run_verify
+
+    res = run_verify(_root(), base)
+    for r in res.reasons:
+        console.print(f"  - {r}")
+    if not res.ok:
+        console.print("[red]cleaner-crew verify: FAILED[/]")
+        raise typer.Exit(1)
+    console.print(f"[green]cleaner-crew verify: ok[/] ({res.category.value})")
 
 
 @app.command()

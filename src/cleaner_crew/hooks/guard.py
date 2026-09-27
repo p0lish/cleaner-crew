@@ -20,15 +20,13 @@ import sys
 from pathlib import Path
 
 from ..models import Category
-from ..policy import Policy, matches
+from ..policy import CREW_PATHS, Policy, matches
 
 WRITE_TOOLS = {"Edit", "Write", "NotebookEdit", "MultiEdit"}
 READ_TOOLS = {"Read", "Grep", "Glob"}
 NETWORK_TOOLS = {"WebFetch", "WebSearch"}
 SECRET_GLOBS = ["**/.env", "**/.env.*", "**/*.pem", "**/*.key", "**/id_rsa*", "**/secrets.env",
                 "**/.npmrc", "**/.pypirc", "**/.netrc", "**/credentials*"]
-# The crew must never be able to rewrite its own rules, whatever policy.yml says.
-ALWAYS_FORBIDDEN_WRITES = [".cleaner-crew/**", ".claude/**", ".git/**", ".mcp.json"]
 
 BASH_DENY = [
     r"\bgit\s+(push|commit|reset|rebase|checkout|switch|remote|config|worktree|fetch|pull)\b",
@@ -75,7 +73,7 @@ def check(event: dict, role: str, worktree: Path, policy: Policy,
         if tool in WRITE_TOOLS:
             if role in ("scout", "manager", "hooded"):
                 return f"the {role} role is read-only"
-            if matches(rel, ALWAYS_FORBIDDEN_WRITES):
+            if matches(rel, CREW_PATHS):
                 return f"{rel} is crew configuration and cannot be edited by agents"
             if policy.is_forbidden(rel, category):
                 return f"{rel} is a forbidden path in policy.yml"

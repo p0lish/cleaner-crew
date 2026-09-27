@@ -1,16 +1,19 @@
 # Cleaner Crew policy: the deterministic gate every change must pass.
-# Agents cannot edit this file (the guard blocks .cleaner-crew/** for all roles).
+# Agents cannot edit this file (the guard blocks .cleaner-crew/** for all roles), and the
+# CI verify job reads it from the base branch, never from a crew MR.
 
 limits:
   max_files_changed: 8
   max_diff_lines: 300
   max_open_mrs: 3            # stop opening MRs until humans review the existing ones
+  max_open_proposals: 10     # stop scouting until humans triage the proposals
   max_cost_per_task_usd: 2
 
 forbidden_paths:             # touching any of these means "escalate to a human"
   - "**/migrations/**"
   - ".github/**"
   - ".gitlab-ci.yml"
+  - "**/CODEOWNERS"
   - "**/auth/**"
   - "**/security/**"
   - "infra/**"
@@ -25,20 +28,44 @@ forbidden_paths:             # touching any of these means "escalate to a human"
 require:
   hooded_approval: true
 
+# Would the tests notice if the changed lines were subtly wrong? Mutates up to
+# max_mutants spots on changed lines (== -> !=, < -> <=, n -> n+1, ...) and re-runs tests.
+mutation:
+  enabled: true
+  max_mutants: 8
+  min_score: 0.5             # below this the MR is opened as a draft
+
+# Autonomy is earned per category from how humans treat the crew's MRs.
+# "Accepted" = merged with no human commits pushed to the branch.
+#   fewer than min_samples -> draft
+#   rate >= promote_at     -> ready
+#   rate <  demote_below   -> shadow (plans are posted on the ticket; nothing is changed)
+# The earned level is capped by each category's max_level. After a demotion, set
+# trust_since to today's date to start a fresh record.
+trust:
+  window: 20
+  min_samples: 5
+  promote_at: 0.8
+  demote_below: 0.5
+
 # Extra test globs can be listed under `test_globs:`; the defaults cover common layouts.
 
 categories:
   bugfix:
     require_repro_test: true
+    max_level: ready
   docs-gap:
-    tests_pass: true
     new_or_changed_test: false
+    max_level: ready
   cleanup:
     new_or_changed_test: false
+    max_level: draft
   perf:
     enabled: false           # enable once you trust the crew with benchmarks
     require_benchmark: true
+    max_level: shadow
   dependency-upgrade:
     enabled: false           # Renovate/Dependabot usually do this better
     allowed: [patch, minor]
     allow_paths: ["**/*.lock", "**/package-lock.json", "**/pnpm-lock.yaml", "**/uv.lock", "**/go.sum"]
+    max_level: draft

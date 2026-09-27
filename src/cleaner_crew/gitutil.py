@@ -85,6 +85,27 @@ def diff_stats(wt: Path, base: str) -> DiffStats:
     return DiffStats(files)
 
 
+_HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+
+
+def changed_lines(wt: Path, base: str) -> dict[str, list[int]]:
+    """Added/modified line numbers (in the new version) per file."""
+    out: dict[str, list[int]] = {}
+    path = None
+    for line in git("diff", "-U0", "--no-color", f"origin/{base}...HEAD", cwd=wt).splitlines():
+        if line.startswith("+++ "):
+            path = line[6:] if line.startswith("+++ b/") else None
+        elif path and (m := _HUNK_RE.match(line)):
+            start, count = int(m.group(1)), int(m.group(2) or 1)
+            out.setdefault(path, []).extend(range(start, start + count))
+    return {p: ls for p, ls in out.items() if ls}
+
+
+def branch_commit_messages(wt: Path, base: str, head: str = "HEAD") -> list[str]:
+    out = git("log", "--format=%B%x1e", f"origin/{base}..{head}", cwd=wt)
+    return [m.strip() + "\n" for m in out.split("\x1e") if m.strip()]
+
+
 def diff_text(wt: Path, base: str) -> str:
     return git("diff", f"origin/{base}...HEAD", cwd=wt)
 

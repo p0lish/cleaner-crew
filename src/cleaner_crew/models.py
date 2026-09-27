@@ -96,6 +96,46 @@ class DiffStats:
         return sum(f.added + f.removed for f in self.files)
 
 
+TRAILER_TASK = "Cleaner-Crew-Task"
+TRAILER_CATEGORY = "Cleaner-Crew-Category"
+
+
+def crew_trailers(task_key: str, category: Category) -> str:
+    """Git trailers on every crew commit. Humans' commits on a crew branch lack them."""
+    return f"{TRAILER_TASK}: {task_key}\n{TRAILER_CATEGORY}: {category.value}"
+
+
+def is_crew_commit(message: str) -> bool:
+    return f"\n{TRAILER_TASK}: " in message
+
+
+def category_label(category: Category) -> str:
+    return f"cleaner-crew:{category.value}"
+
+
+def category_from_labels(labels: list[str]) -> Category | None:
+    values = {c.value for c in Category}
+    for label in labels:
+        name = label.removeprefix("cleaner-crew:")
+        if label.startswith("cleaner-crew:") and name in values:
+            return Category(name)
+    return None
+
+
+@dataclass
+class MrRecord:
+    """A closed crew MR, used to measure how much each category can be trusted."""
+
+    category: Category
+    merged: bool
+    changed_by_human: bool  # a commit without crew trailers was pushed to the branch
+    closed_at: str  # ISO date
+
+    @property
+    def accepted(self) -> bool:
+        return self.merged and not self.changed_by_human
+
+
 @dataclass
 class ConnectionReport:
     ok: bool

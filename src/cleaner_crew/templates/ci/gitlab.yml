@@ -23,3 +23,16 @@ cleaner-crew:
     when: always
     paths: [.cleaner-crew/runs/]
     expire_in: 30 days
+
+# Required check for crew MRs. Enable "Pipelines must succeed" on the project, and protect
+# .gitlab-ci.yml and .cleaner-crew/ with CODEOWNERS + "Require approval from code owners",
+# because GitLab runs the MR's own copy of this file.
+cleaner-crew-verify:
+  image: ghcr.io/astral-sh/uv:python3.12-bookworm
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME =~ /^cleaner-crew\//'
+  variables:
+    GIT_DEPTH: 0
+  script:
+    - git fetch origin "+refs/heads/${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}:refs/remotes/origin/${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}"
+    - uvx --from "__PACKAGE_SPEC__" cleaner-crew verify --base "${CI_MERGE_REQUEST_TARGET_BRANCH_NAME}"

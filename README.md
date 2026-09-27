@@ -2,20 +2,25 @@
 
 A crew of Claude Code agents that picks up small, safe tasks from your tracker
 (Linear, Jira), fixes them in isolation, and opens merge requests on GitHub or GitLab.
-It only ships a change when a deterministic policy gate agrees.
+It only ships a change when a deterministic policy gate agrees, it never merges, and it
+earns more autonomy per category only as humans accept its work.
 
 ```
-scout ──► candidate tickets (label: cleaner-crew)
+scout ──► proposed tickets (cleaner-crew:proposed)
+             │  a human adds the `cleaner-crew` label to the ones worth doing
+candidate tickets (cleaner-crew)
              │
 manager ──► claim ──► triage + plan
              │
              ├─► inspector   write a failing test that reproduces the bug (bugfix)
              ├─► janitor     implement the plan (cannot edit tests)
              ├─► inspector   cover the change with tests (can only edit tests)
-             ├─► tests + lint + diff measured by the orchestrator
+             ├─► tests + lint + diff + mutation testing, run by the orchestrator
              └─► hooded      read-only security review, can veto
              │
-policy gate + manager verdict ──► MR │ draft MR │ escalate to human │ reject
+policy gate + manager verdict + trust level ──► MR │ draft MR │ shadow │ escalate │ reject
+             │
+target repo CI: cleaner-crew-verify (required check) + human approval ──► merge
 ```
 
 ## Install into a repository
@@ -36,6 +41,8 @@ uvx cleaner-crew init        # or: uv tool install cleaner-crew && cleaner-crew 
 4. **Files.** It writes `.cleaner-crew/config.yml`, `policy.yml` and `.claude/agents/cleaner-crew-*.md`.
 5. **Runner.** Choose a scheduled CI job (GitHub Actions / GitLab schedule), a local
    daemon (loop or systemd user timer), or both.
+6. **Protection.** It adds the `cleaner-crew-verify` CI check, checks branch protection on
+   the default branch and tells you exactly what to turn on.
 
 Secrets go to `.cleaner-crew/secrets.env` (gitignored, mode 600) or your CI secrets.
 `config.yml` holds only the variable names.
@@ -48,8 +55,51 @@ Secrets go to `.cleaner-crew/secrets.env` (gitignored, mode 600) or your CI secr
 | `cleaner-crew doctor` | re-check connections, CLI, test baseline, kill switch |
 | `cleaner-crew run --dry-run` | scout and plan only; nothing is claimed, filed or pushed |
 | `cleaner-crew run` | one run: up to `max_tasks_per_run` tickets |
+| `cleaner-crew trust` | each category's earned trust level and acceptance rate |
+| `cleaner-crew verify --base main` | CI check re-applying the base branch's policy to a crew branch |
 | `cleaner-crew daemon` | run in a loop on this machine |
 | `cleaner-crew stop` / `resume` | kill switch (commit `.cleaner-crew/STOP` to stop CI too) |
+
+## How it earns trust
+
+**Humans choose the work.** The scout only *proposes* (`cleaner-crew:proposed`). Adding
+the `cleaner-crew` label takes about ten seconds and is far cheaper than reviewing a
+pointless MR. At most `max_open_proposals` proposals are open at once.
+
+**Autonomy per category is measured, not assumed.** An MR counts as *accepted* if it was
+merged with no human commits pushed to its branch (crew commits carry `Cleaner-Crew-*`
+git trailers). Over the last `trust.window` closed MRs per category:
+
+| record | level | behaviour |
+|---|---|---|
+| fewer than `min_samples` | draft | MRs are opened as drafts |
+| acceptance ≥ `promote_at` (80%) | ready | MRs are opened ready for review |
+| acceptance < `demote_below` (50%) | shadow | the plan is posted on the ticket; nothing changes |
+| otherwise | draft | |
+
+The earned level is capped by each category's `max_level` in `policy.yml`. After fixing
+whatever caused a demotion, set `trust_since` to today's date to start a fresh record.
+History is read from the code host, so CI and local runners agree.
+
+**Tests must actually test the change.** After tests pass, the crew mutates the changed
+lines (`==`→`!=`, `<`→`<=`, `n`→`n+1`, `and`→`or`, ...) and re-runs the tests. If
+fewer than `mutation.min_score` of the mutants are caught, the MR becomes a draft, and
+the surviving mutants are listed in the MR.
+
+## Protecting the target repo
+
+The crew never merges. The repository's own protections are the real safety net:
+
+- **Branch protection** on the default branch: require at least one approving review,
+  dismiss stale approvals, and require `cleaner-crew-verify` plus your test workflow.
+- **`cleaner-crew-verify`** re-checks every `cleaner-crew/*` MR against the policy *from
+  the base branch*. It checks forbidden paths (including the crew's own config), size
+  limits, required tests, category enabled, and crew trailers present. On GitHub it runs
+  as `pull_request_target`, so an MR can't edit the check that judges it, and it never
+  executes the MR's code.
+- **CODEOWNERS** for `/.cleaner-crew/`, `/.claude/` and CI config.
+
+`cleaner-crew doctor` reports whether the default branch is adequately protected.
 
 ## Safety model
 

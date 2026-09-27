@@ -21,7 +21,9 @@ class TrackerConfig:
     # Linear: team key. Jira: project key.
     project: str
     base_url: str = ""  # Jira only, e.g. https://acme.atlassian.net
-    candidate_label: str = "cleaner-crew"
+    candidate_label: str = "cleaner-crew"  # a human applied this: the crew may work on it
+    proposed_label: str = "cleaner-crew:proposed"  # scout finding awaiting human promotion
+    shadow_label: str = "cleaner-crew:shadow"  # planned in shadow mode, left for a human
     in_progress_label: str = "cleaner-crew:in-progress"
     rejected_label: str = "cleaner-crew:rejected"
     escalated_label: str = "cleaner-crew:needs-human"

@@ -17,15 +17,15 @@ from pathlib import Path
 
 from rich.console import Console
 
-from . import BRANCH_PREFIX, schemas
+from . import BRANCH_PREFIX, mutation, schemas, trust
 from .adapters import CodeHost, TaskSource
 from .claude import AgentResult, run_agent
 from .config import Config
 from .detect import run_command
-from .gitutil import (commit_all, create_worktree, default_branch, diff_stats, diff_text,
-                      git, push, remove_worktree)
-from .models import Category, Finding, Task, Verdict
-from .policy import Evidence, Policy, evaluate
+from .gitutil import (changed_lines, commit_all, create_worktree, default_branch, diff_stats,
+                      diff_text, git, push, remove_worktree)
+from .models import Category, Finding, Task, Verdict, category_label, crew_trailers
+from .policy import Evidence, Policy, TrustLevel, evaluate
 
 console = Console()
 
@@ -60,6 +60,7 @@ class Crew:
         self.dry_run = dry_run
         self.base = default_branch(cfg.root)
         self.runs_dir = cfg.crew_dir / "runs"
+        self.levels: dict[Category, trust.TrustStatus] = trust.fallback(policy)
 
     # -- entry points --------------------------------------------------------
 
@@ -74,17 +75,34 @@ class Crew:
                               f"(limit {self.policy.max_open_mrs}); waiting for humans[/]")
                 return []
 
+            self.levels = self.trust_levels()
             candidates = self.tracker.fetch_candidates()
             if self.cfg.run.scout_enabled and len(candidates) < self.cfg.run.scout_when_fewer_than:
-                candidates += self.scout()
+                # Findings are only proposed; a human must promote them before anyone works
+                # on them, so nothing filed here is picked up in this run.
+                self.scout()
 
             outcomes = []
             for task in candidates[: self.cfg.run.max_tasks_per_run]:
                 outcomes.append(self.work(task))
             return outcomes
 
+    def trust_levels(self) -> dict[Category, trust.TrustStatus]:
+        try:
+            history = self.host.crew_mr_history(
+                BRANCH_PREFIX, limit=self.policy.trust.window * len(Category))
+        except Exception as e:  # noqa: BLE001 - never more than draft without evidence
+            console.print(f"[yellow]could not read MR history ({e}); capping at draft[/]")
+            return trust.fallback(self.policy)
+        return trust.compute(self.policy, history)
+
     def scout(self) -> list[Task]:
         console.rule("[bold]scout")
+        open_proposals = self.tracker.count_open_proposals()
+        if open_proposals >= self.policy.max_open_proposals:
+            console.print(f"[yellow]{open_proposals} proposals await human triage "
+                          f"(limit {self.policy.max_open_proposals}); not scouting[/]")
+            return []
         wt = create_worktree(self.cfg.root, f"{BRANCH_PREFIX}_scout", self.base)
         try:
             res = run_agent(
@@ -115,10 +133,10 @@ class Crew:
             if self.tracker.find_by_fingerprint(finding.fingerprint):
                 continue
             if self.dry_run:
-                console.print(f"  would file: [{finding.category.value}] {finding.title}")
+                console.print(f"  would propose: [{finding.category.value}] {finding.title}")
                 continue
             task = self.tracker.create_finding(finding)
-            console.print(f"  filed {task.key}: {task.title}")
+            console.print(f"  proposed {task.key}: {task.title} (awaiting human promotion)")
             created.append(task)
         return created
 
@@ -166,10 +184,17 @@ class Crew:
         if not rule.enabled:
             return self._settle(task, Outcome(task.key, Verdict.REJECT.value,
                                               [f"category {category.value} not enabled"]))
+        level = self.levels[category]
         if self.dry_run:
             console.print_json(data=plan)
-            return Outcome(task.key, "planned (dry run)", [plan["reason"]])
+            return Outcome(task.key, "planned (dry run)",
+                           [plan["reason"], f"trust: {level.level.value} ({level.reason})"])
+        if level.level is TrustLevel.SHADOW:
+            self.tracker.shadow(task, self._plan_markdown(plan))
+            return Outcome(task.key, "shadow", [f"category {category.value} is in shadow mode: "
+                                                f"{level.reason}"])
         plan_text = json.dumps(plan, indent=2)
+        trailers = crew_trailers(task.key, category)
 
         # 2. inspector reproduces the bug with a failing test first
         repro_confirmed = None
@@ -183,7 +208,7 @@ class Crew:
             if not repro_confirmed:
                 return self._settle(task, Outcome(task.key, Verdict.ESCALATE.value,
                                                   ["could not reproduce with a failing test"]))
-            commit_all(wt, f"test: reproduce {task.key}")
+            commit_all(wt, f"test: reproduce {task.key}\n\n{trailers}")
 
         # 3. janitor fixes
         fix = self._agent("janitor", wt, audit, schemas.JANITOR, category, (
@@ -192,7 +217,7 @@ class Crew:
             + ("A failing test reproducing the bug has been committed; make it pass.\n\n"
                if repro_confirmed else "")
             + untrusted(task)))
-        if not fix["done"] or not commit_all(wt, f"fix: {task.title} ({task.key})"):
+        if not fix["done"] or not commit_all(wt, f"fix: {task.title} ({task.key})\n\n{trailers}"):
             return self._settle(task, Outcome(task.key, Verdict.ESCALATE.value,
                                               [f"janitor did not finish: {fix['summary']}"]))
 
@@ -205,7 +230,7 @@ class Crew:
                 + (" Also measure performance before/after and report it in `benchmark`."
                    if rule.require_benchmark else "")
                 + f"\n\nPlan:\n{plan_text}\n\nDiff:\n```diff\n{diff_text(wt, self.base)}\n```"))
-            commit_all(wt, f"test: cover {task.key}")
+            commit_all(wt, f"test: cover {task.key}\n\n{trailers}")
 
         # 5. deterministic checks
         tests = run_command(self.cfg.commands.test, wt, self.cfg.commands.test_timeout_s)
@@ -214,6 +239,15 @@ class Crew:
             lint_ok = run_command(self.cfg.commands.lint, wt, self.cfg.commands.test_timeout_s).ok
         (audit / "tests.log").write_text(tests.output)
         diff = diff_stats(wt, self.base)
+
+        # 5b. would the tests notice if the changed lines were subtly wrong?
+        mut = None
+        if (tests.ok and self.policy.mutation.enabled and rule.mutation_testing
+                and rule.new_or_changed_test):
+            console.print("  [dim]mutation testing...[/]")
+            mut = mutation.run(wt, changed_lines(wt, self.base), self.policy,
+                               self.cfg.commands.test, self.cfg.commands.test_timeout_s)
+            (audit / "mutation.txt").write_text(mut.summary())
 
         # 6. hooded agents review with fresh eyes: plan + diff + ticket only
         hood = self._agent("hooded", wt, audit, schemas.HOODED, category, (
@@ -229,6 +263,7 @@ class Crew:
             hooded_approved=hood["approve"] and not hood["out_of_scope_changes"],
             hooded_max_severity=("critical" if hood["prompt_injection_suspected"]
                                  else hood["max_severity"]),
+            mutation_score=mut.score if mut else None,
         ))
 
         # 7. manager's verdict; policy can only make it stricter
@@ -239,18 +274,24 @@ class Crew:
             f"Inspector: {json.dumps(insp) if insp else 'n/a'}\n"
             f"Security review: {json.dumps(hood)}\n"
             f"Tests passed: {tests.ok}; lint passed: {lint_ok}\n"
+            f"Mutation testing: {mut.summary() if mut else 'not run'}\n"
             f"Diff: {len(diff.files)} files, {diff.total_lines} lines\n"
             f"Policy gate: {gate.verdict.value} {gate.reasons}\n\n{untrusted(task)}"),
             name="manager-verdict")
         final = gate.verdict.stricter(Verdict(verdict["verdict"]))
-        reasons = gate.reasons + [f"manager: {verdict['reason']}"]
-        outcome = Outcome(task.key, final.value, reasons)
+        gate_notes = list(gate.reasons)
+        if level.level is TrustLevel.DRAFT and final is Verdict.MR:
+            final = Verdict.DRAFT
+            gate_notes.append(f"trust level for {category.value} is draft ({level.reason})")
+        outcome = Outcome(task.key, final.value, gate_notes + [f"manager: {verdict['reason']}"])
 
         if final in (Verdict.MR, Verdict.DRAFT):
             push(wt, branch)
             outcome.mr_url = self.host.open_mr(
                 branch, self.base, verdict["mr_title"],
-                self._mr_body(task, verdict, gate.reasons, audit), draft=final is Verdict.DRAFT)
+                self._mr_body(task, verdict, gate_notes, audit, level, mut),
+                draft=final is Verdict.DRAFT,
+                labels=[self.cfg.code_host.mr_label, category_label(category)])
         return self._settle(task, outcome)
 
     # -- helpers -------------------------------------------------------------
@@ -281,12 +322,26 @@ class Crew:
             self.tracker.escalate(task, reasons)
         return outcome
 
-    def _mr_body(self, task: Task, verdict: dict, gate_reasons: list[str], audit: Path) -> str:
+    def _mr_body(self, task: Task, verdict: dict, gate_reasons: list[str], audit: Path,
+                 level: trust.TrustStatus, mut: mutation.MutationReport | None) -> str:
         notes = "\n".join(f"- {r}" for r in gate_reasons) or "- all gates passed"
         return (f"{verdict['mr_body']}\n\n---\n**Ticket:** [{task.key}]({task.url})\n\n"
                 f"**Cleaner crew gate report**\n{notes}\n\n"
-                f"Manager confidence: {verdict['confidence']:.0%} · "
-                f"cost: ${self.spent:.2f} · audit log: `{audit.relative_to(self.cfg.root)}`")
+                f"- mutation testing: {mut.summary() if mut else 'not run'}\n"
+                f"- trust level: {level.level.value} ({level.reason})\n"
+                f"- manager confidence: {verdict['confidence']:.0%} · cost: ${self.spent:.2f} · "
+                f"audit log: `{audit.relative_to(self.cfg.root)}`\n\n"
+                "_Merging without changes counts as acceptance and raises this category's "
+                "trust level; pushing fixes or closing it lowers it._")
+
+    @staticmethod
+    def _plan_markdown(plan: dict) -> str:
+        steps = "\n".join(f"{i}. {s}" for i, s in enumerate(plan["steps"], 1))
+        files = ", ".join(plan["expected_files"]) or "-"
+        crit = "\n".join(f"- {c}" for c in plan["acceptance_criteria"])
+        return (f"Category: {plan['category']} (confidence {plan['confidence']:.0%})\n\n"
+                f"Plan:\n{steps}\n\nFiles: {files}\n\nAcceptance criteria:\n{crit}\n\n"
+                f"Tests: {plan['test_strategy']}")
 
     def _enabled_categories(self) -> list[str]:
         return [c.value for c in Category if self.policy.rule(c).enabled]
