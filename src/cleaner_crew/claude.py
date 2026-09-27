@@ -3,16 +3,22 @@
 Every role runs in a fresh context (separate `claude -p` process) so the inspector and
 the hooded agent never see the janitor's reasoning, only its output.
 
-Three independent layers restrict what an agent can do:
-  1. `--allowedTools` / `--disallowedTools` per role
-  2. the agent definition's `tools:` frontmatter
-  3. the PreToolUse guard hook (cleaner_crew.hooks.guard)
+Layers that restrict what an agent can do:
+  1. `--tools`: only the tools in the agent definition's `tools:` frontmatter exist
+  2. `--allowedTools` / `--disallowedTools` per role (e.g. which Bash commands)
+  3. `--restricted`: ignores the target repo's own .claude settings files and confines
+     file tools to the task worktree
+  4. the PreToolUse guard hook (cleaner_crew.hooks.guard), passed via `--settings`
+
+The role's instructions are appended to the system prompt rather than selected with
+`--agent`, because Claude Code ignores `--json-schema` when `--agent` is set.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -76,11 +82,12 @@ def guard_settings() -> str:
 def run_agent(role: str, prompt: str, *, cfg: Config, cwd: Path, schema: dict,
               budget_usd: float, audit_dir: Path, category: str | None = None,
               timeout_s: int = 1800) -> AgentResult:
-    name = f"cleaner-crew-{role}"
-    agents = {name: load_agent_definition(role, cfg.root)}
+    agent = load_agent_definition(role, cfg.root)
     argv = [
         "claude", "-p", prompt,
-        "--agents", json.dumps(agents), "--agent", name,
+        "--append-system-prompt", agent["prompt"],
+        "--restricted",
+        "--tools", ",".join(agent["tools"]),
         "--output-format", "json",
         "--json-schema", json.dumps(schema),
         "--allowedTools", *role_tools(role, cfg),
@@ -120,10 +127,7 @@ def run_agent(role: str, prompt: str, *, cfg: Config, cwd: Path, schema: dict,
 
     output = res.get("structured_output")
     if output is None:
-        try:
-            output = json.loads(res.get("result", ""))
-        except (json.JSONDecodeError, TypeError):
-            output = None
+        output = _json_from_text(res.get("result") or "")
     return AgentResult(
         ok=not res.get("is_error") and output is not None,
         output=output,
@@ -131,3 +135,19 @@ def run_agent(role: str, prompt: str, *, cfg: Config, cwd: Path, schema: dict,
         cost_usd=float(res.get("total_cost_usd") or 0),
         denials=res.get("permission_denials", []),
     )
+
+
+_FENCED_JSON = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.S)
+
+
+def _json_from_text(text: str) -> dict | None:
+    """Fallback when structured output is missing: a bare or fenced JSON object."""
+    candidates = [text.strip()] + [m.group(1) for m in _FENCED_JSON.finditer(text)][::-1]
+    for c in candidates:
+        try:
+            obj = json.loads(c)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict):
+            return obj
+    return None

@@ -20,14 +20,15 @@ FAKE_CLAUDE = textwrap.dedent('''\
     import json, os, sys
     from pathlib import Path
     argv = sys.argv
-    name = argv[argv.index("--agent") + 1]
-    agent = name.removeprefix("cleaner-crew-")
-    # mirror the real CLI's --agents validation
-    definition = json.loads(argv[argv.index("--agents") + 1])[name]
-    if not (isinstance(definition["tools"], list)
-            and all(isinstance(t, str) for t in definition["tools"])):
-        print(f"Error: Invalid --agents configuration:\\n{name}.tools: Invalid input")
-        sys.exit(1)
+    agent = os.environ["CLEANER_CREW_ROLE"]
+    # mirror the real CLI: --json-schema is silently ignored when --agent is set
+    if "--agent" in argv:
+        print(json.dumps({"type": "result", "is_error": False, "result": "prose only"}))
+        sys.exit(0)
+    for flag in ("--restricted", "--tools", "--append-system-prompt", "--settings"):
+        if flag not in argv:
+            print(f"fake claude: expected {flag}", file=sys.stderr)
+            sys.exit(1)
     prompt = argv[argv.index("-p") + 1]
     mode = os.environ.get("FAKE_MODE", "good")
     out = None

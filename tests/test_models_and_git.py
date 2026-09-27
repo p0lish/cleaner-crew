@@ -56,3 +56,15 @@ def test_diff_stats(tmp_path: Path):
     stats = diff_stats(tmp_path, "main")
     assert sorted(stats.paths) == ["a.txt", "b.txt"]
     assert stats.total_lines == 2
+
+
+@pytest.mark.parametrize("text,expected", [
+    ('{"a": 1}', {"a": 1}),
+    ('Here you go:\n```json\n{"a": 2}\n```', {"a": 2}),
+    ('draft ```json\n{"a": 1}\n``` final ```\n{"a": 3}\n```', {"a": 3}),
+    ("I found three fixes. 1. bugfix ...", None),
+    ("[1, 2]", None),
+])
+def test_json_from_text(text, expected):
+    from cleaner_crew.claude import _json_from_text
+    assert _json_from_text(text) == expected
