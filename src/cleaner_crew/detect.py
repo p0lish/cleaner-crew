@@ -18,6 +18,7 @@ class Stack:
     install: str = ""  # upgrade one dependency: {package} and {version} are substituted
     outdated: str = ""  # machine-readable list of outdated dependencies
     post_install: list[str] = field(default_factory=list)  # e.g. download browsers
+    test_targeted: str = ""  # run only {files}
 
 
 def _node_runner(root: Path) -> str:
@@ -54,23 +55,28 @@ def detect_stack(root: Path) -> Stack | None:
             # No --with-deps: older Playwright versions apt-install package names that no
             # longer exist on newer Ubuntu; CI runner images already ship the libraries.
             post.append("npx playwright install chromium")
+        targeted = ("npx vitest run {files}" if "vitest" in deps else
+                    "npx jest {files}" if "jest" in deps else "")
         return Stack(
             "node",
             test=f"{run} test" if "test" in scripts else "",
             lint=f"{run} run lint" if "lint" in scripts else "",
             ci_install=ci_install, install=install, outdated=outdated, post_install=post,
+            test_targeted=targeted,
         )
     if (root / "pyproject.toml").exists() or (root / "setup.py").exists():
         text = (root / "pyproject.toml").read_text(errors="ignore") if (
             root / "pyproject.toml").exists() else ""
         if (root / "uv.lock").exists():
             return Stack("python", test="uv run pytest -q",
+                         test_targeted="uv run pytest -q {files}",
                          lint="uv run ruff check ." if "ruff" in text else "",
                          ci_install="uv sync --locked",
                          install="uv add {package}=={version}",
                          outdated="uv pip list --outdated --format json")
         prefix = "poetry run " if (root / "poetry.lock").exists() else ""
         return Stack("python", test=f"{prefix}pytest -q",
+                     test_targeted=f"{prefix}pytest -q {{files}}",
                      lint=f"{prefix}ruff check ." if "ruff" in text else "",
                      ci_install="poetry install" if prefix else "pip install -e .")
     if (root / "go.mod").exists():

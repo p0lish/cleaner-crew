@@ -40,7 +40,10 @@ def _cmd_rules(cmd: str) -> list[str]:
 
 
 def role_tools(role: str, cfg: Config) -> list[str]:
-    run_checks = _cmd_rules(cfg.commands.test) + _cmd_rules(cfg.commands.lint)
+    c = cfg.commands
+    targeted = c.test_targeted.split("{files}")[0].strip()
+    run_checks = [rule for cmd in (c.test, c.lint, targeted, *c.agent_commands)
+                  for rule in _cmd_rules(cmd)]
     return {
         "scout": READ_ONLY + ["Bash(git log *)", "Bash(git ls-files *)"],
         "manager": READ_ONLY,

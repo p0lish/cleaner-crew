@@ -32,7 +32,8 @@ FAKE_CLAUDE = textwrap.dedent('''\
     mode = os.environ.get("FAKE_MODE", "good")
     out = None
     if agent == "scout":
-        out = {"findings": [{"title": "Handle empty input", "category": "bugfix",
+        out = {"findings": [{"title": os.environ.get("FAKE_SCOUT_TITLE", "Handle empty input"),
+                             "category": "bugfix",
                              "description": "crashes on []", "files": ["src/app.py"],
                              "effort": "small", "risk": "low"}]}
     elif agent == "manager" and "Triage" in prompt:
@@ -55,7 +56,7 @@ FAKE_CLAUDE = textwrap.dedent('''\
         out = {"covers_change": True, "test_files": ["tests/test_cover.txt"], "notes": "",
                "benchmark": ""}
     elif agent == "janitor":
-        body = "fixed = True\\n"
+        body = "fixed = False  # attempted\\n" if mode == "nofix" else "fixed = True\\n"
         if mode == "weak":  # lines the tests never look at
             body += "limit = 10\\nretries = 3\\n"
         Path("src").mkdir(exist_ok=True); Path("src/app.py").write_text(body)
@@ -153,14 +154,17 @@ def repo(tmp_path, monkeypatch):
     return root
 
 
-def make_crew(root, tracker, host, scout=False):
+DEFAULT_TEST = ("[ ! -f tests/test_bug.txt ] || grep -q 'fixed = True' src/app.py "
+                "|| { echo 'FAIL tests/test_bug.txt'; false; }")
+
+
+def make_crew(root, tracker, host, scout=False, **commands):
     cfg = Config(
         root=root,
         tracker=TrackerConfig("linear", "ENG", token_env="LINEAR_API_KEY"),
         code_host=CodeHostConfig("github", "acme/app", "", "GITHUB_TOKEN"),
         # red after the repro test lands, green once the janitor's fix is in
-        commands=CommandsConfig(
-            test="[ ! -f tests/test_bug.txt ] || grep -q 'fixed = True' src/app.py"),
+        commands=CommandsConfig(**{"test": DEFAULT_TEST, **commands}),
         run=RunConfig(scout_enabled=scout),
     )
     return Crew(cfg, Policy.load(root), tracker, host)

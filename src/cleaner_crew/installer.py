@@ -190,7 +190,9 @@ def setup_commands(root: Path) -> tuple[CommandsConfig, bool]:
     if stack:
         cmds.ci_install, cmds.install = stack.ci_install, stack.install
         cmds.outdated, cmds.post_install = stack.outdated, list(stack.post_install)
-        for label, value in (("install (CI)", cmds.ci_install), ("upgrade", cmds.install),
+        cmds.test_targeted = stack.test_targeted
+        for label, value in (("targeted tests", cmds.test_targeted),
+                             ("install (CI)", cmds.ci_install), ("upgrade", cmds.install),
                              ("outdated", cmds.outdated),
                              ("post-install", " && ".join(cmds.post_install))):
             if value:
