@@ -52,6 +52,12 @@ class CommandsConfig:
     install: str = ""  # upgrades one dependency; {package} and {version} are substituted
     outdated: str = ""  # lists outdated dependencies as JSON (npm/pnpm/uv formats)
     post_install: list[str] = field(default_factory=list)  # e.g. npx playwright install
+    # Runs only the given test files ({files} is substituted). Used to prove a bug
+    # reproduction: the new test must fail before the fix and pass after it.
+    test_targeted: str = ""
+    # Extra command prefixes agents may run, e.g. ["npm run test:unit"]. The targeted
+    # test command's prefix is always allowed.
+    agent_commands: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -62,6 +68,9 @@ class RunConfig:
     scout_when_fewer_than: int = 2
     max_findings_per_scout: int = 3
     model: str = ""  # empty -> Claude Code default
+    # Run the test suite on the base branch before working on any ticket. If it is already
+    # red, the crew can't tell its own breakage from existing failures, so it stops.
+    baseline_check: bool = True
     daemon_interval_s: int = 3600
 
 

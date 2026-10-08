@@ -61,6 +61,20 @@ Secrets go to `.cleaner-crew/secrets.env` (gitignored, mode 600) or your CI secr
 | `cleaner-crew daemon` | run in a loop on this machine |
 | `cleaner-crew stop` / `resume` | kill switch (commit `.cleaner-crew/STOP` to stop CI too) |
 
+## What makes a test result trustworthy
+
+- **Baseline first.** Before working on any ticket, each run executes the test suite on
+  the base branch, in the same environment. If it's already red, the run stops without
+  claiming or rejecting anything (`run.baseline_check`). A green suite on a laptop proves
+  nothing about the CI runner.
+- **Reproductions are checked, not believed.** For bugfixes, the inspector's new test must
+  be a test file it actually added, must **fail before** the fix, and must **pass after**
+  it. With `commands.test_targeted` (e.g. `npx vitest run {files}`, detected by `init`)
+  only that test is run, so an unrelated failure can't pose as a reproduction. Without it,
+  the suite's failure output must at least name the new test.
+- **Agents can check their own work.** The targeted test command, plus anything listed in
+  `commands.agent_commands`, is allowed for janitor, quartermaster and inspector.
+
 ## How it earns trust
 
 **Humans choose the work.** The scout only *proposes* (`cleaner-crew:proposed`). Adding
