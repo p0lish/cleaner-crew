@@ -426,7 +426,9 @@ class Crew:
         plan_text = json.dumps(plan, indent=2)
 
         # deterministic checks
+        started = time.monotonic()
         tests = run_command(self.cfg.commands.test, wt, self.cfg.commands.test_timeout_s)
+        tests_s = time.monotonic() - started
         lint_ok = True
         if self.cfg.commands.lint:
             lint_ok = run_command(self.cfg.commands.lint, wt, self.cfg.commands.test_timeout_s).ok
@@ -439,7 +441,8 @@ class Crew:
                 and rule.new_or_changed_test and category is not Category.DEPENDENCY_UPGRADE):
             console.print("  [dim]mutation testing...[/]")
             mut = mutation.run(wt, changed_lines(wt, self.base), self.policy,
-                               self.cfg.commands.test, self.cfg.commands.test_timeout_s)
+                               self.cfg.commands.test,
+                               mutation.mutant_timeout(tests_s, self.cfg.commands.test_timeout_s))
             (audit / "mutation.txt").write_text(mut.summary())
 
         # hooded agents review with fresh eyes: plan + diff + ticket only

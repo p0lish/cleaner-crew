@@ -18,6 +18,16 @@ from pathlib import Path
 from .detect import run_command
 from .policy import Policy
 
+# A mutant whose tests run this much slower than the unmutated suite counts as killed
+# (it most likely hangs). The floor absorbs start-up noise on fast suites.
+MUTANT_SLOWDOWN = 3
+MUTANT_MIN_TIMEOUT_S = 30
+
+
+def mutant_timeout(baseline_s: float, cap_s: int) -> int:
+    """Per-mutant test timeout, from how long the unmutated suite took."""
+    return min(cap_s, max(MUTANT_MIN_TIMEOUT_S, round(MUTANT_SLOWDOWN * baseline_s)))
+
 # (pattern, replacement, label). Operators need surrounding spaces to avoid generics/arrows.
 OPERATORS: list[tuple[str, str, str]] = [
     (r" == ", " != ", "== -> !="),

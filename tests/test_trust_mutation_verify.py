@@ -118,6 +118,12 @@ def test_mutation_run(tmp_path, test_cmd, killed):
     assert (repo / "calc.py").read_text() == "def limit(x):\n    return x >= 10\n"  # restored
 
 
+def test_mutant_timeout_scales_with_the_suite():
+    assert mutation.mutant_timeout(0.4, 900) == 30     # fast suite: the floor
+    assert mutation.mutant_timeout(100, 900) == 300    # 3x the unmutated run
+    assert mutation.mutant_timeout(400, 900) == 900    # never above the configured cap
+
+
 def test_low_mutation_score_downgrades_to_draft():
     p = Policy(categories={"bugfix": CategoryRule()})
     ev = Evidence(Category.BUGFIX, DiffStats([FileChange("a.py", 1, 0),
