@@ -13,6 +13,7 @@ from pathlib import Path
 import yaml
 
 from . import CREW_DIR
+from .sandbox import LOADED_SECRET_NAMES
 
 
 @dataclass
@@ -72,6 +73,9 @@ class RunConfig:
     # red, the crew can't tell its own breakage from existing failures, so it stops.
     baseline_check: bool = True
     daemon_interval_s: int = 3600
+    # Run tests, lint and mutation runs (all of which execute code agents wrote) in an
+    # empty network namespace. Needs Linux user namespaces; fails closed if unavailable.
+    isolate_network: bool = False
 
 
 @dataclass
@@ -128,6 +132,8 @@ def load_secrets(root: Path) -> None:
             continue
         k, v = line.split("=", 1)
         os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+        # Everything in secrets.env is a secret: keep it away from untrusted code.
+        LOADED_SECRET_NAMES.add(k.strip())
 
 
 def env(name: str) -> str:

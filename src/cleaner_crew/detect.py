@@ -5,8 +5,11 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from . import sandbox
 
 
 @dataclass
@@ -103,13 +106,28 @@ class CommandResult:
     output: str
 
 
-def run_command(cmd: str, cwd: Path, timeout_s: int, env: dict | None = None) -> CommandResult:
+def run_command(cmd: str, cwd: Path, timeout_s: int, env: dict | None = None, *,
+                scrub: Iterable[str] = (), isolate_network: bool = False) -> CommandResult:
+    """Run `cmd` through the shell.
+
+    `scrub` names environment variables to remove (the crew's secrets, when the command
+    runs code an agent wrote). `isolate_network` runs it in an empty network namespace and
+    fails closed if that isn't possible.
+    """
     # CI=1 and no stdin: test runners like vitest/jest otherwise start in watch mode when
     # the daemon runs in a terminal, and hang until the timeout.
-    full_env = {**os.environ, "CI": "1", **(env or {})}
+    drop = set(scrub)
+    full_env = {k: v for k, v in {**os.environ, "CI": "1", **(env or {})}.items()
+                if k not in drop}
+    argv: str | list[str] = cmd
+    if isolate_network:
+        argv = sandbox.offline_argv(cmd)
+        if argv is None:
+            return CommandResult(False, sandbox.UNAVAILABLE)
     try:
-        res = subprocess.run(cmd, shell=True, cwd=cwd, capture_output=True, text=True,
-                             timeout=timeout_s, stdin=subprocess.DEVNULL, env=full_env)
+        res = subprocess.run(argv, shell=isinstance(argv, str), cwd=cwd, capture_output=True,
+                             text=True, timeout=timeout_s, stdin=subprocess.DEVNULL,
+                             env=full_env)
     except subprocess.TimeoutExpired:
         return CommandResult(False, f"timed out after {timeout_s}s")
     out = (res.stdout + res.stderr)[-8000:]

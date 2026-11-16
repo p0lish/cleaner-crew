@@ -21,7 +21,7 @@ from pathlib import Path
 
 from rich.console import Console
 
-from . import BRANCH_PREFIX, deps, mutation, schemas, trust
+from . import BRANCH_PREFIX, deps, mutation, sandbox, schemas, trust
 from .adapters import CodeHost, TaskSource
 from .claude import AgentResult, run_agent
 from .config import Config
@@ -115,6 +115,7 @@ class Crew:
         self.runs_dir = cfg.crew_dir / "runs"
         self.levels: dict[Category, trust.TrustStatus] = trust.fallback(policy)
         self._known: list[Task] | None = None
+        self._secrets = sandbox.secret_env_names(cfg)
 
     # -- entry points --------------------------------------------------------
 
@@ -154,7 +155,7 @@ class Crew:
         audit = self._audit_dir("baseline")
         wt = create_worktree(self.cfg.root, f"{BRANCH_PREFIX}_baseline", self.base)
         try:
-            res = run_command(self.cfg.commands.test, wt, self.cfg.commands.test_timeout_s)
+            res = self._run(self.cfg.commands.test, wt)
         finally:
             remove_worktree(self.cfg.root, wt)
             git("branch", "-D", f"{BRANCH_PREFIX}_baseline", cwd=self.cfg.root, check=False)
@@ -433,7 +434,7 @@ class Crew:
         console.print(f"  [dim]supply run: {pkg} {current} -> {target}...[/]")
         install = cmds.install.format(package=shlex.quote(pkg), version=shlex.quote(target))
         for cmd in [install, *cmds.post_install]:
-            res = run_command(cmd, wt, cmds.test_timeout_s)
+            res = self._run(cmd, wt, network=True)  # the supply run needs the registry
             (audit / "supply-run.log").open("a").write(f"$ {cmd}\n{res.output}\n")
             if not res.ok:
                 return stop(Verdict.ESCALATE, f"`{cmd}` failed: {res.output[-400:]}")
@@ -457,7 +458,7 @@ class Crew:
                   f"Lockfile changes:\n{lock_report}")
 
         # quartermaster adapts the code
-        before = run_command(cmds.test, wt, cmds.test_timeout_s)
+        before = self._run(cmds.test, wt)
         qm = self._agent("quartermaster", wt, audit, schemas.JANITOR, category, (
             f"{supply}\n\nThe new version is installed. Adapt the codebase to it following the "
             "plan below. Do not edit tests, lockfiles or install anything.\n\n"
@@ -471,7 +472,7 @@ class Crew:
 
         # inspector adapts tests only if the upgrade broke them
         insp = None
-        after = run_command(cmds.test, wt, cmds.test_timeout_s)
+        after = self._run(cmds.test, wt)
         if not after.ok:
             insp = self._agent("inspector", wt, audit, schemas.INSPECTOR, category, (
                 f"{supply}\n\nAdapt the tests to the upgraded dependency's API. Keep every "
@@ -491,11 +492,11 @@ class Crew:
 
         # deterministic checks
         started = time.monotonic()
-        tests = run_command(self.cfg.commands.test, wt, self.cfg.commands.test_timeout_s)
+        tests = self._run(self.cfg.commands.test, wt)
         tests_s = time.monotonic() - started
         lint_ok = True
         if self.cfg.commands.lint:
-            lint_ok = run_command(self.cfg.commands.lint, wt, self.cfg.commands.test_timeout_s).ok
+            lint_ok = self._run(self.cfg.commands.lint, wt).ok
         (audit / "tests.log").write_text(tests.output)
         diff = diff_stats(wt, self.base)
 
@@ -506,7 +507,9 @@ class Crew:
             console.print("  [dim]mutation testing...[/]")
             mut = mutation.run(wt, changed_lines(wt, self.base), self.policy,
                                self.cfg.commands.test,
-                               mutation.mutant_timeout(tests_s, self.cfg.commands.test_timeout_s))
+                               mutation.mutant_timeout(tests_s, self.cfg.commands.test_timeout_s),
+                               scrub=self._secrets,
+                               isolate_network=self.cfg.run.isolate_network)
             (audit / "mutation.txt").write_text(mut.summary())
 
         # hooded agents review with fresh eyes: plan + diff + ticket only
@@ -564,8 +567,17 @@ class Crew:
         c = self.cfg.commands
         if c.test_targeted and files:
             cmd = c.test_targeted.format(files=" ".join(shlex.quote(f) for f in files))
-            return run_command(cmd, wt, c.test_timeout_s)
-        return run_command(c.test, wt, c.test_timeout_s)
+            return self._run(cmd, wt)
+        return self._run(c.test, wt)
+
+    def _run(self, cmd: str, wt: Path, network: bool = False) -> CommandResult:
+        """Run a project command over code the crew (or an upgrade) may have written.
+
+        It never sees the crew's credentials, and is offline when run.isolate_network is
+        on. Only the supply run, which installs a dependency, keeps the network.
+        """
+        return run_command(cmd, wt, self.cfg.commands.test_timeout_s, scrub=self._secrets,
+                           isolate_network=self.cfg.run.isolate_network and not network)
 
     def _repro_fails(self, wt: Path, repro: dict) -> tuple[list[str], str | None]:
         """Check the inspector's claim instead of trusting it: (repro test files, problem)."""
