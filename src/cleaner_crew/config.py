@@ -74,7 +74,9 @@ class RunConfig:
     baseline_check: bool = True
     daemon_interval_s: int = 3600
     # Run tests, lint and mutation runs (all of which execute code agents wrote) in an
-    # empty network namespace. Needs Linux user namespaces; fails closed if unavailable.
+    # empty network namespace, and every agent's Bash commands in Claude Code's sandbox
+    # (no network, no credentials). Needs Linux user namespaces, plus bubblewrap and socat
+    # for the agent sandbox; fails closed if either is unavailable.
     isolate_network: bool = False
 
 

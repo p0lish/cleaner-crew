@@ -77,6 +77,11 @@ def doctor() -> None:
     else:
         row("network isolation", True, "off (run.isolate_network); "
             + ("available on this machine" if isolation_available() else "unavailable here"))
+    if cfg.run.isolate_network:
+        missing = [b for b in ("bwrap", "socat") if not shutil.which(b)]
+        row("agent sandbox", not missing,
+            "bubblewrap + socat found" if not missing else
+            f"missing {', '.join(missing)}: agents will refuse to start (failIfUnavailable)")
     # The same environment the crew gives untrusted runs: no secrets, offline if configured.
     res = run_command(cfg.commands.test, cfg.root, cfg.commands.test_timeout_s,
                       scrub=secret_env_names(cfg), isolate_network=cfg.run.isolate_network)

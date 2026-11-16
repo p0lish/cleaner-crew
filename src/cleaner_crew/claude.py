@@ -9,6 +9,12 @@ Layers that restrict what an agent can do:
   3. `--restricted`: ignores the target repo's own .claude settings files and confines
      file tools to the task worktree
   4. the PreToolUse guard hook (cleaner_crew.hooks.guard), passed via `--settings`
+  5. with `run.isolate_network`, Claude Code's own OS sandbox around every Bash command
+     (and the test code it runs): no network, no credentials, no reads of credential files
+
+Whatever the config, commands an agent starts never inherit Claude's own credentials
+(`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`): the `claude` process needs them, the test code it runs
+doesn't.
 
 The role's instructions are appended to the system prompt rather than selected with
 `--agent`, because Claude Code ignores `--json-schema` when `--agent` is set.
@@ -78,10 +84,34 @@ class AgentResult:
     denials: list = field(default_factory=list)
 
 
-def guard_settings() -> str:
+# Credential files a sandboxed command may not read, on top of `secrets.env`. With the
+# network off they couldn't be sent anywhere, but they could still be written into a diff.
+CREDENTIAL_PATHS = ["~/.ssh", "~/.aws", "~/.netrc", "~/.config/gh", "~/.config/glab-cli",
+                    "~/.docker/config.json", "~/.claude/.credentials.json", "~/.npmrc",
+                    "~/.pypirc"]
+
+
+def agent_settings(cfg: Config) -> dict:
+    """`--settings` for every agent: the guard hook, plus the OS sandbox when isolating."""
     cmd = f"{shlex.quote(sys.executable)} -m cleaner_crew.hooks.guard"
-    return json.dumps({"hooks": {"PreToolUse": [
-        {"matcher": "*", "hooks": [{"type": "command", "command": cmd}]}]}})
+    settings: dict = {"hooks": {"PreToolUse": [
+        {"matcher": "*", "hooks": [{"type": "command", "command": cmd}]}]}}
+    if cfg.run.isolate_network:
+        settings["sandbox"] = {
+            "enabled": True,
+            # bubblewrap/socat missing: refuse to start rather than run unsandboxed
+            "failIfUnavailable": True,
+            # no `dangerouslyDisableSandbox` retries outside the sandbox
+            "allowUnsandboxedCommands": False,
+            # --allowedTools keeps deciding which commands may run at all
+            "autoAllowBashIfSandboxed": False,
+            "network": {"allowedDomains": []},
+            "credentials": {"envVars": [{"name": n, "mode": "deny"}
+                                        for n in sorted(secret_env_names(cfg))]},
+            "filesystem": {"denyRead": [str(cfg.crew_dir / "secrets.env"),
+                                        *CREDENTIAL_PATHS]},
+        }
+    return settings
 
 
 def run_agent(role: str, prompt: str, *, cfg: Config, cwd: Path, schema: dict,
@@ -98,7 +128,7 @@ def run_agent(role: str, prompt: str, *, cfg: Config, cwd: Path, schema: dict,
         "--allowedTools", *role_tools(role, cfg),
         "--disallowedTools", *ALWAYS_DENIED,
         "--max-budget-usd", f"{max(budget_usd, 0.01):.2f}",
-        "--settings", guard_settings(),
+        "--settings", json.dumps(agent_settings(cfg)),
         "--strict-mcp-config",  # no MCP servers: agents get no tracker/code host access
         "--no-session-persistence",
     ]
@@ -114,6 +144,8 @@ def run_agent(role: str, prompt: str, *, cfg: Config, cwd: Path, schema: dict,
     # Agents never need tracker or code host credentials, only Claude's own.
     for var in secret_env_names(cfg) - CLAUDE_AUTH_ENV:
         env.pop(var, None)
+    # ...and the commands they start (tests, lint) don't get Claude's either.
+    env["CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"] = "1"
 
     audit_dir.mkdir(parents=True, exist_ok=True)
     try:

@@ -71,7 +71,9 @@ FAKE_CLAUDE = textwrap.dedent('''\
     Path(os.environ["FAKE_LOG"]).open("a").write(
         json.dumps({"agent": agent, "role_env": os.environ.get("CLEANER_CREW_ROLE"),
                     "prompt": prompt,
-                    "leaked_token": "LINEAR_API_KEY" in os.environ}) + "\\n")
+                    "leaked_token": "LINEAR_API_KEY" in os.environ,
+                    "subprocess_scrub": os.environ.get("CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"),
+                    "settings": json.loads(argv[argv.index("--settings") + 1])}) + "\\n")
     print(json.dumps({"type": "result", "is_error": False, "result": "",
                       "structured_output": out, "total_cost_usd": 0.01}))
 ''')
@@ -287,3 +289,38 @@ def test_test_runs_never_see_crew_secrets(repo, tmp_path, monkeypatch):
 
     assert outcome.verdict == "mr", outcome.reasons
     assert not leaks.exists(), "a test/lint run saw the tracker or code host token"
+
+
+def test_agent_commands_never_get_claude_credentials(repo):
+    task = Task("1", "ENG-1", "Pager off by one", "details", "https://t/ENG-1")
+    make_crew(repo, FakeTracker([task]), FakeHost(TRUSTED)).run_once()
+    calls = agents_called(repo)
+    assert calls and all(c["subprocess_scrub"] == "1" for c in calls)
+    # isolation off: the guard hook only, no OS sandbox
+    assert all("sandbox" not in c["settings"] and "PreToolUse" in c["settings"]["hooks"]
+               for c in calls)
+
+
+def test_isolation_sandboxes_every_agent(repo, monkeypatch):
+    # What matters here is how every agent is started, not whether this host can create
+    # network namespaces (GitHub's ubuntu-24.04 runners can't): run project commands as-is.
+    from cleaner_crew import sandbox
+    monkeypatch.setattr(sandbox, "offline_argv", lambda cmd: ["sh", "-c", cmd])
+    task = Task("1", "ENG-1", "Pager off by one", "details", "https://t/ENG-1")
+    crew = make_crew(repo, FakeTracker([task]), FakeHost(TRUSTED))
+    crew.cfg.run.isolate_network = True
+    [outcome] = crew.run_once()
+    assert outcome.verdict == "mr", outcome.reasons
+    calls = agents_called(repo)
+    assert calls
+    for c in calls:
+        sb = c["settings"]["sandbox"]
+        assert sb["enabled"] and sb["failIfUnavailable"]
+        assert sb["allowUnsandboxedCommands"] is False
+        assert sb["autoAllowBashIfSandboxed"] is False
+        assert sb["network"]["allowedDomains"] == []
+        denied = {e["name"] for e in sb["credentials"]["envVars"] if e["mode"] == "deny"}
+        assert {"LINEAR_API_KEY", "GITHUB_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN",
+                "ANTHROPIC_API_KEY"} <= denied
+        assert any(p.endswith(".cleaner-crew/secrets.env")
+                   for p in sb["filesystem"]["denyRead"])

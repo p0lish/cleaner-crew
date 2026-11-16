@@ -179,6 +179,13 @@ The real fix is GitHub Pro or a public repo.
   namespace (Linux user namespaces, no root; loopback still works for local test servers).
   If the namespace can't be created, those runs fail closed. `cleaner-crew doctor` shows
   whether it's available. Only the dependency supply run keeps the network.
+- **Agents' own commands are contained too.** Commands an agent starts (its test and lint
+  runs) never inherit Claude's credentials (`CLAUDE_CODE_SUBPROCESS_ENV_SCRUB`). With
+  `run.isolate_network`, every agent also runs its Bash commands in Claude Code's OS
+  sandbox: no network, crew secrets unset, no reads of `secrets.env`, `~/.ssh`, `~/.aws`,
+  `~/.config/gh` and similar, and no retries outside the sandbox. It needs `bubblewrap`
+  and `socat` on Linux (`apt install bubblewrap socat`); without them agents refuse to
+  start instead of running unsandboxed.
 - **Test infrastructure is guarded.** `conftest.py` counts as a test file, so only
   inspectors may edit it, and the default policy forbids runner and build config
   (`package.json`, `pyproject.toml`, `Makefile`, `pytest.ini`, `*.config.*` for
