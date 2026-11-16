@@ -301,13 +301,16 @@ def test_agent_commands_never_get_claude_credentials(repo):
                for c in calls)
 
 
-def test_isolation_sandboxes_every_agent(repo):
+def test_isolation_sandboxes_every_agent(repo, monkeypatch):
+    # What matters here is how every agent is started, not whether this host can create
+    # network namespaces (GitHub's ubuntu-24.04 runners can't): run project commands as-is.
+    from cleaner_crew import sandbox
+    monkeypatch.setattr(sandbox, "offline_argv", lambda cmd: ["sh", "-c", cmd])
     task = Task("1", "ENG-1", "Pager off by one", "details", "https://t/ENG-1")
     crew = make_crew(repo, FakeTracker([task]), FakeHost(TRUSTED))
     crew.cfg.run.isolate_network = True
-    # the project commands in this fake repo are offline shell checks, so this works either
-    # way; what matters is what every agent was started with
-    crew.run_once()
+    [outcome] = crew.run_once()
+    assert outcome.verdict == "mr", outcome.reasons
     calls = agents_called(repo)
     assert calls
     for c in calls:
