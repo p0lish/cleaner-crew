@@ -94,3 +94,18 @@ def test_disabled_category_rejects(policy):
 def test_verdict_stricter():
     assert Verdict.MR.stricter(Verdict.DRAFT) is Verdict.DRAFT
     assert Verdict.REJECT.stricter(Verdict.MR) is Verdict.REJECT
+
+
+def test_template_forbids_runner_config_except_for_upgrades():
+    from importlib import resources
+
+    from cleaner_crew.models import Category
+    from cleaner_crew.policy import Policy
+
+    p = Policy.from_yaml((resources.files("cleaner_crew.templates") / "policy.yml").read_text())
+    for path in ("package.json", "web/package.json", "pyproject.toml", "Makefile",
+                 "vitest.config.ts", "pytest.ini"):
+        assert p.is_forbidden(path, Category.BUGFIX), path
+    assert not p.is_forbidden("package.json", Category.DEPENDENCY_UPGRADE)
+    assert p.is_test("conftest.py") and p.is_test("tests/conftest.py")
+    assert not p.is_forbidden("src/app.py", Category.BUGFIX)

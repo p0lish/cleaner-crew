@@ -69,7 +69,17 @@ def doctor() -> None:
             detail + ("" if protected else " — see README: Protecting the target repo"))
     except Exception as e:  # noqa: BLE001
         row("branch protection", False, str(e))
-    res = run_command(cfg.commands.test, cfg.root, cfg.commands.test_timeout_s)
+    from .sandbox import isolation_available, secret_env_names
+    if cfg.run.isolate_network:
+        row("network isolation", isolation_available(),
+            "untrusted runs are offline" if isolation_available() else
+            "unavailable: no unprivileged network namespaces; crew runs will fail closed")
+    else:
+        row("network isolation", True, "off (run.isolate_network); "
+            + ("available on this machine" if isolation_available() else "unavailable here"))
+    # The same environment the crew gives untrusted runs: no secrets, offline if configured.
+    res = run_command(cfg.commands.test, cfg.root, cfg.commands.test_timeout_s,
+                      scrub=secret_env_names(cfg), isolate_network=cfg.run.isolate_network)
     row("test baseline", res.ok, cfg.commands.test)
     enabled = [c for c, r in policy.categories.items() if r.enabled]
     row("policy", bool(enabled), f"categories: {', '.join(enabled) or 'none enabled'}")

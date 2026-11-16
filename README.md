@@ -169,8 +169,20 @@ The real fix is GitHub Pro or a public repo.
   frontmatter, and a PreToolUse guard hook (`cleaner_crew.hooks.guard`). The guard blocks
   the network, git history commands, secrets files, anything outside the task worktree,
   and the crew's own config.
-- **Agents hold no credentials.** Tracker and code host tokens are stripped from agent
-  environments. Only the orchestrator claims tickets, commits, pushes and opens MRs.
+- **Agents hold no credentials.** Tracker and code host tokens (and everything in
+  `secrets.env`) are stripped from agent environments; agents keep only Claude's own
+  auth. Only the orchestrator claims tickets, commits, pushes and opens MRs.
+- **Code the agents wrote runs without secrets.** Tests, lint and mutation runs execute
+  agent-written code (test files, `conftest.py`, a `package.json` script), so they get an
+  environment with every crew credential removed, including Claude's. Set
+  `run.isolate_network: true` in `config.yml` to also run them in an empty network
+  namespace (Linux user namespaces, no root; loopback still works for local test servers).
+  If the namespace can't be created, those runs fail closed. `cleaner-crew doctor` shows
+  whether it's available. Only the dependency supply run keeps the network.
+- **Test infrastructure is guarded.** `conftest.py` counts as a test file, so only
+  inspectors may edit it, and the default policy forbids runner and build config
+  (`package.json`, `pyproject.toml`, `Makefile`, `pytest.ini`, `*.config.*` for
+  jest/vitest/vite/playwright) except in dependency upgrades.
 - **Ticket text is untrusted.** It is wrapped as data. The hooded agent checks the diff
   against the plan and flags suspected prompt injection, which blocks the change.
 - **Limits:** max open crew MRs, a per-task cost cap, a green baseline requirement, and a

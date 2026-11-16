@@ -29,6 +29,7 @@ from pathlib import Path
 import yaml
 
 from .config import Config
+from .sandbox import CLAUDE_AUTH_ENV, secret_env_names
 
 ROLES = ("scout", "manager", "janitor", "quartermaster", "inspector", "hooded")
 READ_ONLY = ["Read", "Grep", "Glob"]
@@ -110,11 +111,9 @@ def run_agent(role: str, prompt: str, *, cfg: Config, cwd: Path, schema: dict,
            "CLEANER_CREW_ROOT": str(cfg.root)}
     if category:
         env["CLEANER_CREW_CATEGORY"] = category
-    # Agents never need tracker or code host credentials.
-    for var in (cfg.tracker.token_env, cfg.tracker.email_env, cfg.code_host.token_env,
-                "GITHUB_TOKEN", "GH_TOKEN", "GITLAB_TOKEN"):
-        if var:
-            env.pop(var, None)
+    # Agents never need tracker or code host credentials, only Claude's own.
+    for var in secret_env_names(cfg) - CLAUDE_AUTH_ENV:
+        env.pop(var, None)
 
     audit_dir.mkdir(parents=True, exist_ok=True)
     try:

@@ -12,6 +12,7 @@ is conservative by default.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -139,7 +140,8 @@ def generate(wt: Path, changed: dict[str, list[int]], policy: Policy) -> list[Mu
 
 
 def run(wt: Path, changed: dict[str, list[int]], policy: Policy, test_cmd: str,
-        timeout_s: int) -> MutationReport:
+        timeout_s: int, *, scrub: Iterable[str] = (),
+        isolate_network: bool = False) -> MutationReport:
     report = MutationReport()
     for m in generate(wt, changed, policy):
         f = wt / m.path
@@ -149,7 +151,8 @@ def run(wt: Path, changed: dict[str, list[int]], policy: Policy, test_cmd: str,
         lines[m.line - 1] = m.mutated + eol
         try:
             f.write_text("".join(lines))
-            killed = not run_command(test_cmd, wt, timeout_s).ok
+            killed = not run_command(test_cmd, wt, timeout_s, scrub=scrub,
+                                     isolate_network=isolate_network).ok
         finally:
             f.write_text(original)
         report.total += 1

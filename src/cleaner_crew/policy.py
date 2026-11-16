@@ -28,6 +28,8 @@ DEFAULT_TEST_GLOBS = [
     "**/*.spec.*",
     "**/*_test.go",
     "**/spec/**",
+    # pytest loads it on every run: test infrastructure, so janitors may not touch it
+    "**/conftest.py",
 ]
 
 # The crew must never change its own rules or agent definitions, whatever policy.yml says.

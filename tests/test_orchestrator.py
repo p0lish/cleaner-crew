@@ -273,3 +273,17 @@ def test_scout_only_proposes(repo):
     # second run: same finding is not proposed twice
     crew.run_once()
     assert len(tracker.filed) == 1
+
+
+def test_test_runs_never_see_crew_secrets(repo, tmp_path, monkeypatch):
+    """Tests, lint and mutants run agent-written code; it must not find the crew's tokens."""
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_secret")
+    leaks = tmp_path / "leaks"
+    probe = (f'{{ [ -z "${{LINEAR_API_KEY:-}}${{GITHUB_TOKEN:-}}" ] || echo leak >> {leaks}; }}')
+    task = Task("1", "ENG-1", "Pager off by one", "details", "https://t/ENG-1")
+    host = FakeHost(TRUSTED)
+    [outcome] = make_crew(repo, FakeTracker([task]), host,
+                          test=f"{probe} && {DEFAULT_TEST}", lint=probe).run_once()
+
+    assert outcome.verdict == "mr", outcome.reasons
+    assert not leaks.exists(), "a test/lint run saw the tracker or code host token"

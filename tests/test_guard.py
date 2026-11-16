@@ -29,6 +29,7 @@ def test_janitor_edits_source(policy):
     (f"{WT}/.env", "secrets"),
     (f"{WT}/app/migrations/1.py", "forbidden"),
     (f"{WT}/tests/test_app.py", "inspector"),
+    (f"{WT}/conftest.py", "inspector"),  # loaded by every pytest run: test infrastructure
     (f"{WT}/.cleaner-crew/policy.yml", "crew configuration"),
     (f"{WT}/.claude/agents/cleaner-crew-janitor.md", "crew configuration"),
 ])

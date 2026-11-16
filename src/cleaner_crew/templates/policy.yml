@@ -24,6 +24,20 @@ forbidden_paths:             # touching any of these means "escalate to a human"
   - "**/pnpm-lock.yaml"
   - "**/uv.lock"
   - "**/go.sum"
+  # Test runner and build config runs as code during every test run, and decides what the
+  # tests check. An agent editing it could run code outside its role or quietly turn the
+  # suite into a no-op. (conftest.py counts as a test file: only inspectors may edit it.)
+  - "**/package.json"
+  - "**/pyproject.toml"
+  - "**/setup.py"
+  - "**/setup.cfg"
+  - "**/pytest.ini"
+  - "**/tox.ini"
+  - "**/Makefile"
+  - "**/jest.config.*"
+  - "**/vitest.config.*"
+  - "**/vite.config.*"
+  - "**/playwright.config.*"
 
 require:
   hooded_approval: true
@@ -72,5 +86,6 @@ categories:
   dependency-upgrade:
     enabled: false
     allowed: [patch, minor]
-    allow_paths: ["**/*.lock", "**/package-lock.json", "**/pnpm-lock.yaml", "**/uv.lock", "**/go.sum"]
+    allow_paths: ["**/*.lock", "**/package-lock.json", "**/pnpm-lock.yaml", "**/uv.lock", "**/go.sum",
+                  "**/package.json", "**/pyproject.toml"]  # the supply run bumps the manifest
     max_level: draft
